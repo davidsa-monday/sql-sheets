@@ -3,6 +3,7 @@
   "displayName": "sql-sheets",
   "description": "Assist with putting data into google sheets at scale.",
   "version": "0.0.1",
+  "publisher": "davidsa",
   "repository": {
     "type": "git",
     "url": "https://github.com/yourusername/sql-sheets"
@@ -52,7 +53,8 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
     "test": "vscode-test",
-    "package-install": "vsce package && code --install-extension sql-sheets-0.0.1.vsix"
+    "package": "npx @vscode/vsce package",
+    "install-extension": "/Applications/Visual\\ Studio\\ Code.app/Contents/Resources/app/bin/code --install-extension \"$(ls -t sql-sheets-*.vsix | head -n 1)\""
   },
   "devDependencies": {
     "@types/vscode": "^1.105.0",
@@ -63,7 +65,8 @@
     "eslint": "^9.36.0",
     "typescript": "^5.9.3",
     "@vscode/test-cli": "^0.0.11",
-    "@vscode/test-electron": "^2.5.2"
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^2.24.0"
   },
   "dependencies": {
     "@vscode/webview-ui-toolkit": "^1.2.2"

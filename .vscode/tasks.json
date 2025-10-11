@@ -17,15 +17,34 @@
 			}
 		},
 		{
-			"label": "Package and Install Extension",
+			"label": "Package Extension",
 			"type": "npm",
-			"script": "package-install",
+			"script": "package",
 			"group": "build",
+			"problemMatcher": [],
 			"presentation": {
-				"reveal": "always",
-				"panel": "new"
-			},
-			"problemMatcher": []
+				"reveal": "always"
+			}
+		},
+		{
+			"label": "Package and Install",
+			"type": "shell",
+			"command": "npm run package && /Applications/Visual\\ Studio\\ Code.app/Contents/Resources/app/bin/code --install-extension \"$(ls -t sql-sheets-*.vsix | head -n 1)\"",
+			"group": "build",
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always"
+			}
+		},
+		{
+			"label": "Install Current VSIX",
+			"type": "shell",
+			"command": "/Applications/Visual\\ Studio\\ Code.app/Contents/Resources/app/bin/code --install-extension \"$(ls -t sql-sheets-*.vsix | head -n 1)\"",
+			"group": "build",
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always"
+			}
 		}
 	]
 }
