@@ -14,7 +14,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onLanguage:sql"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -22,7 +24,7 @@
         {
           "id": "sql-parameters-view-container",
           "title": "SQL Parameters",
-          "icon": "media/icon.svg"
+          "icon": "media/icon.png"
         }
       ]
     },
@@ -37,8 +39,9 @@
     },
     "commands": [
       {
-        "command": "sql-sheets.helloWorld",
-        "title": "Hello World"
+        "command": "sql-sheets.showEditor",
+        "title": "sql-sheets: Show SQL Sheet Editor",
+        "icon": "$(database)"
       }
     ]
   },

@@ -15,13 +15,12 @@ export function activate(context: vscode.ExtensionContext) {
 	// The command has been defined in the package.json file
 	// Now provide the implementation of the command with registerCommand
 	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('sql-sheets.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello VSCODE from sql-sheets!');
+	const showEditorCommand = vscode.commands.registerCommand('sql-sheets.showEditor', () => {
+		// Show the SQL Sheet Editor view
+		vscode.commands.executeCommand('sql-sheets.editor.focus');
 	});
 
-	context.subscriptions.push(disposable);
+	context.subscriptions.push(showEditorCommand);
 
 	const viewModel = new SqlSheetViewModel();
 	const editorProvider = new SqlSheetEditorProvider(context.extensionUri, viewModel);
