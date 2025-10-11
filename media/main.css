@@ -1,0 +1,25 @@
+vscode-data-grid {
+    display: block;
+}
+
+vscode-data-grid-row {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    border-bottom: 1px solid var(--vscode-editorWidget-border);
+}
+
+vscode-data-grid-cell {
+    padding: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+vscode-data-grid-cell:first-child {
+    border-right: 1px solid var(--vscode-editorWidget-border);
+}
+
+vscode-text-field {
+    width: 100%;
+    box-sizing: border-box;
+}

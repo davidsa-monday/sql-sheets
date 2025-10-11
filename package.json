@@ -12,6 +12,24 @@
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sql-parameters-view-container",
+          "title": "SQL Parameters",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sql-parameters-view-container": [
+        {
+          "id": "sql-sheets.editor",
+          "name": "SQL Sheet Editor",
+          "type": "webview"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "sql-sheets.helloWorld",
@@ -37,5 +55,8 @@
     "typescript": "^5.9.3",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2"
+  },
+  "dependencies": {
+    "@vscode/webview-ui-toolkit": "^1.2.2"
   }
 }
