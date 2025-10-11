@@ -4,6 +4,38 @@ import { SqlFile } from '../models/SqlFile';
 import { SqlQuery } from '../models/SqlQuery';
 
 export class SqlSheetViewModel {
+    // Get all parameter keys from SqlSheetConfiguration using reflection
+    private static _parameterKeys: string[] = Object.getOwnPropertyNames(
+        new SqlSheetConfiguration()).filter(key => key !== 'constructor');
+
+    // Expose the keys as a property
+    public get parameterKeys(): string[] {
+        return SqlSheetViewModel._parameterKeys;
+    }
+
+    // Expose parameter descriptions
+    public get parameterDescriptions(): Record<string, string> {
+        return SqlSheetConfiguration.parameterDescriptions;
+    }
+
+    // Get parameter types
+    public get parameterTypes(): Record<string, string> {
+        const config = new SqlSheetConfiguration();
+        const types: Record<string, string> = {};
+
+        // Determine the type of each property
+        for (const key of SqlSheetViewModel._parameterKeys) {
+            // Use centralized parameter type checking
+            if (SqlSheetConfiguration.isBooleanParameter(key)) {
+                types[key] = 'boolean';
+            } else {
+                types[key] = 'string';
+            }
+        }
+
+        return types;
+    }
+
     private _sqlFile?: SqlFile;
     private _activeQuery?: SqlQuery;
     private _onDidChange: vscode.EventEmitter<SqlSheetViewModel> = new vscode.EventEmitter<SqlSheetViewModel>();
@@ -22,6 +54,7 @@ export class SqlSheetViewModel {
 
     public async updateParameter(key: string, value: string): Promise<void> {
         if (this._sqlFile && this._activeQuery) {
+            // The SqlFile class will handle the type conversion appropriately
             await this._sqlFile.updateParameter(this._activeQuery, key, value);
         }
     }

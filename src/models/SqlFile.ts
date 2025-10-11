@@ -27,6 +27,12 @@ export class SqlFile {
 
         const edit = new vscode.WorkspaceEdit();
 
+        // Format value if it's for a boolean parameter
+        if (SqlSheetConfiguration.isBooleanParameter(key)) {
+            // Use centralized validation in the SqlSheetConfiguration class
+            value = SqlSheetConfiguration.formatBooleanToString(value);
+        }
+
         // Check if the parameter already exists
         const paramRegex = new RegExp(`--${key}:\\s*.*`, 'g');
         const match = paramRegex.exec(queryText);
@@ -89,12 +95,24 @@ export class SqlFile {
                 queryText = block.substring(firstSelect);
             }
 
+            // Process boolean parameters using centralized validation in SqlSheetConfiguration
+            // If the parameter doesn't exist in the SQL comment, it will be undefined
+            // and the constructor will use the default value (false)
+            const transposeParam = SqlSheetConfiguration.stringToBoolean(params['transpose']);
+            const dataOnlyParam = SqlSheetConfiguration.stringToBoolean(params['data_only']);
+            const skipParam = SqlSheetConfiguration.stringToBoolean(params['skip']);
+
             const config = new SqlSheetConfiguration(
                 params['spreadsheet_id'],
                 params['sheet_name'],
                 params['start_cell'],
                 params['start_named_range'],
-                params['table_name']
+                params['table_name'],
+                params['table_namet'],
+                params['pre_file'],
+                transposeParam,
+                dataOnlyParam,
+                skipParam
             );
 
             this._queries.push(new SqlQuery(config, queryText, startOffset, endOffset));

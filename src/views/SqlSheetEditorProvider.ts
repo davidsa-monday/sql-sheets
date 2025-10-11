@@ -15,7 +15,10 @@ export class SqlSheetEditorProvider implements vscode.WebviewViewProvider {
             if (this._view) {
                 this._view.webview.postMessage({
                     type: 'update',
-                    config: vm.config
+                    config: vm.config,
+                    keys: vm.parameterKeys,
+                    descriptions: vm.parameterDescriptions,
+                    types: vm.parameterTypes
                 });
             }
         });
@@ -51,7 +54,10 @@ export class SqlSheetEditorProvider implements vscode.WebviewViewProvider {
         setTimeout(() => {
             webviewView.webview.postMessage({
                 type: 'update',
-                config: this._viewModel.config
+                config: this._viewModel.config,
+                keys: this._viewModel.parameterKeys,
+                descriptions: this._viewModel.parameterDescriptions,
+                types: this._viewModel.parameterTypes
             });
         }, 200);
     }
