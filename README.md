@@ -1,22 +1,38 @@
-# sql-sheets README
+# SQL Sheets
 
-This is the README for your extension "sql-sheets". After writing up a brief description, we recommend including the following sections.
+SQL Sheets is a VS Code extension that helps you manage SQL query parameters for exporting data to Google Sheets. The extension provides a convenient editor pane to view and edit parameters within SQL files.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- Parameter editor for SQL files with Google Sheets integration parameters
+- Auto-detection of parameters in SQL files
+- Edit parameters directly in the editor pane
+- Parameter tooltips showing descriptions
+- Specialized field types (dropdowns for boolean values)
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+This extension works with SQL files that include special comment headers for Google Sheets integration.
 
-## Extension Settings
+## Usage
+
+1. Open a SQL file in VS Code
+2. Add parameters as comments in the format `--parameter: value`
+3. Use the SQL Sheet Editor pane in the Activity Bar to view and edit parameters
+
+## Parameters
+
+The following parameters are supported:
+
+- `spreadsheet_id`: The Google Sheet ID where results will be sent
+- `sheet_name`: The name or index of the sheet within the spreadsheet
+- `start_cell`: The cell where output should begin (e.g., "A1")
+- `start_named_range`: Alternative to start_cell, can use a named range in Google Sheets
+- `transpose`: Set to "true" to transpose the output data
+- `table_name`: A title for the table
+- `data_only`: Set to "true" to output only data without headers
+- `skip`: Set to "true" to skip processing this query
+- `pre_file`: Path to a SQL file that should be executed before this query
 
 Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
 

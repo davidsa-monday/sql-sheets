@@ -3,6 +3,11 @@
   "displayName": "sql-sheets",
   "description": "Assist with putting data into google sheets at scale.",
   "version": "0.0.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/sql-sheets"
+  },
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.105.0"
   },
