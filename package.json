@@ -50,11 +50,6 @@
         "icon": "$(play)"
       },
       {
-        "command": "sql-sheets.loadCredentials",
-        "title": "sql-sheets: Load Snowflake Credentials from File",
-        "icon": "$(file-code)"
-      },
-      {
         "command": "sql-sheets.showSettings",
         "title": "sql-sheets: Show Settings",
         "icon": "$(gear)"
@@ -68,11 +63,6 @@
         "command": "sql-sheets.exportFileToSheets",
         "title": "sql-sheets: Export SQL File to Google Sheets",
         "icon": "$(file-symlink-file)"
-      },
-      {
-        "command": "sql-sheets.exportSelectionToSheets",
-        "title": "sql-sheets: Export Selected SQL to Google Sheets",
-        "icon": "$(selection)"
       }
     ],
     "configuration": {

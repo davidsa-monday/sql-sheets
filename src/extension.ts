@@ -93,69 +93,6 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	});
 
-	// Add command to load credentials from a file
-	const loadCredentialsCommand = vscode.commands.registerCommand('sql-sheets.loadCredentials', async () => {
-		// Show file picker
-		const options: vscode.OpenDialogOptions = {
-			canSelectMany: false,
-			openLabel: 'Select Credentials File',
-			filters: {
-				'JSON Files': ['json']
-			}
-		};
-
-		const fileUri = await vscode.window.showOpenDialog(options);
-
-		if (!fileUri || fileUri.length === 0) {
-			return;
-		}
-
-		const filePath = fileUri[0].fsPath;
-
-		try {
-			// Read and parse the file
-			const fileContent = fs.readFileSync(filePath, 'utf-8');
-			const credentials = JSON.parse(fileContent);
-
-			// Validate the structure
-			if (!credentials.user || !credentials.account) {
-				throw new Error('Invalid credentials file. Must contain at least "user" and "account" fields.');
-			}
-
-			// Save the configuration
-			const config = vscode.workspace.getConfiguration('sql-sheets');
-			await config.update('connection.credentialsFile', filePath, vscode.ConfigurationTarget.Global);
-			await config.update('connection.user', credentials.user, vscode.ConfigurationTarget.Global);
-			await config.update('connection.password', credentials.password || '', vscode.ConfigurationTarget.Global);
-			await config.update('connection.account', credentials.account, vscode.ConfigurationTarget.Global);
-
-			if (credentials.warehouse) {
-				await config.update('connection.warehouse', credentials.warehouse, vscode.ConfigurationTarget.Global);
-			}
-
-			if (credentials.database) {
-				await config.update('connection.database', credentials.database, vscode.ConfigurationTarget.Global);
-			}
-
-			if (credentials.schema) {
-				await config.update('connection.schema', credentials.schema, vscode.ConfigurationTarget.Global);
-			}
-
-			vscode.window.showInformationMessage(`Credentials loaded successfully from ${path.basename(filePath)}!`);
-
-			// Test the connection
-			const snowflakeService = getSnowflakeService();
-			try {
-				const connection = await snowflakeService.createConnection();
-				vscode.window.showInformationMessage('Successfully connected to Snowflake!');
-			} catch (err) {
-				vscode.window.showErrorMessage(`Failed to connect to Snowflake: ${err instanceof Error ? err.message : String(err)}`);
-			}
-
-		} catch (err) {
-			vscode.window.showErrorMessage(`Failed to load credentials: ${err instanceof Error ? err.message : String(err)}`);
-		}
-	});
 
 	// Register command to show settings page
 	const showSettingsCommand = vscode.commands.registerCommand('sql-sheets.showSettings', () => {
@@ -182,20 +119,15 @@ export function activate(context: vscode.ExtensionContext) {
 		await exportViewModel.exportActiveFileToSheets();
 	});
 
-	// Register command for exporting selected SQL to Google Sheets
-	const exportSelectionToSheetsCommand = vscode.commands.registerCommand('sql-sheets.exportSelectionToSheets', async () => {
-		const exportViewModel = getSqlSheetsExportViewModel();
-		await exportViewModel.exportSelectionToSheets();
-	});
+
 
 	// Register all commands
 	context.subscriptions.push(showEditorCommand);
 	context.subscriptions.push(executeQueryCommand);
-	context.subscriptions.push(loadCredentialsCommand);
 	context.subscriptions.push(showSettingsCommand);
 	context.subscriptions.push(exportQueryToSheetsCommand);
 	context.subscriptions.push(exportFileToSheetsCommand);
-	context.subscriptions.push(exportSelectionToSheetsCommand);
+
 
 	// Register view provider
 	const viewModel = new SqlSheetViewModel();
