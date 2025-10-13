@@ -17,6 +17,36 @@
 			}
 		},
 		{
+			"type": "npm",
+			"script": "compile",
+			"group": "build",
+			"problemMatcher": "$tsc",
+			"presentation": {
+				"reveal": "always"
+			},
+			"label": "npm: compile"
+		},
+		{
+			"label": "Clean Output",
+			"type": "shell",
+			"command": "rm -rf out",
+			"group": "build",
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always"
+			}
+		},
+		{
+			"label": "Clean and Compile",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Clean Output",
+				"npm: compile"
+			],
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
 			"label": "Package Extension",
 			"type": "npm",
 			"script": "package",

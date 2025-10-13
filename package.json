@@ -43,8 +43,68 @@
         "command": "sql-sheets.showEditor",
         "title": "sql-sheets: Show SQL Sheet Editor",
         "icon": "$(database)"
+      },
+      {
+        "command": "sql-sheets.executeQuery",
+        "title": "sql-sheets: Execute SQL Query",
+        "icon": "$(play)"
+      },
+      {
+        "command": "sql-sheets.loadCredentials",
+        "title": "sql-sheets: Load Snowflake Credentials from File",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "sql-sheets.showSettings",
+        "title": "sql-sheets: Show Settings",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "sql-sheets.exportQueryToSheets",
+        "title": "sql-sheets: Export SQL Query to Google Sheets",
+        "icon": "$(export)"
+      },
+      {
+        "command": "sql-sheets.exportFileToSheets",
+        "title": "sql-sheets: Export SQL File to Google Sheets",
+        "icon": "$(file-symlink-file)"
+      },
+      {
+        "command": "sql-sheets.exportSelectionToSheets",
+        "title": "sql-sheets: Export Selected SQL to Google Sheets",
+        "icon": "$(selection)"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "SQL Sheets",
+      "properties": {
+        "sql-sheets.connection.credentialsFile": {
+          "type": "string",
+          "default": "",
+          "description": "Path to JSON file containing Snowflake credentials"
+        },
+        "sql-sheets.google.serviceAccountFile": {
+          "type": "string",
+          "default": "",
+          "description": "Path to JSON file containing Google Service Account credentials"
+        },
+        "sql-sheets.export.lastSpreadsheetId": {
+          "type": "string",
+          "default": "",
+          "description": "The last used Google Sheets spreadsheet ID"
+        },
+        "sql-sheets.export.lastSheetName": {
+          "type": "string",
+          "default": "Sheet1",
+          "description": "The last used sheet name or ID"
+        },
+        "sql-sheets.export.lastStartCell": {
+          "type": "string",
+          "default": "A1",
+          "description": "The last used start cell"
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -57,18 +117,21 @@
     "install-extension": "/Applications/Visual\\ Studio\\ Code.app/Contents/Resources/app/bin/code --install-extension \"$(ls -t sql-sheets-*.vsix | head -n 1)\""
   },
   "devDependencies": {
-    "@types/vscode": "^1.105.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
+    "@types/vscode": "^1.105.0",
     "@typescript-eslint/eslint-plugin": "^8.46.0",
     "@typescript-eslint/parser": "^8.46.0",
-    "eslint": "^9.36.0",
-    "typescript": "^5.9.3",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
-    "@vscode/vsce": "^2.24.0"
+    "@vscode/vsce": "^2.24.0",
+    "eslint": "^9.36.0",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@vscode/webview-ui-toolkit": "^1.2.2"
+    "@vscode/webview-ui-toolkit": "^1.2.2",
+    "google-auth-library": "^9.15.1",
+    "googleapis": "^134.0.0",
+    "snowflake-sdk": "^1.15.0"
   }
 }

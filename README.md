@@ -1,6 +1,6 @@
 # SQL Sheets
 
-SQL Sheets is a VS Code extension that helps you manage SQL query parameters for exporting data to Google Sheets. The extension provides a convenient editor pane to view and edit parameters within SQL files.
+SQL Sheets is a VS Code extension that helps you manage SQL query parameters for exporting data to Google Sheets. The extension provides a convenient editor pane to view and edit parameters within SQL files, and execute SQL queries directly against Snowflake.
 
 ## Features
 
@@ -9,6 +9,8 @@ SQL Sheets is a VS Code extension that helps you manage SQL query parameters for
 - Edit parameters directly in the editor pane
 - Parameter tooltips showing descriptions
 - Specialized field types (dropdowns for boolean values)
+- Execute SQL queries directly against Snowflake
+- Load Snowflake credentials from a JSON file
 
 ## Requirements
 
@@ -18,6 +20,37 @@ This extension works with SQL files that include special comment headers for Goo
 
 1. Open a SQL file in VS Code
 2. Add parameters as comments in the format `--parameter: value`
+3. Configure Snowflake connection using one of these methods:
+   - Command: "sql-sheets: Configure Snowflake Connection"
+   - Command: "sql-sheets: Load Snowflake Credentials from File"
+4. Execute SQL queries using the command "sql-sheets: Execute SQL Query"
+
+## Configuring Snowflake Connection
+
+### Method 1: Using the Configuration UI
+
+1. Open the command palette (`Ctrl+Shift+P` or `Cmd+Shift+P`)
+2. Run the command "sql-sheets: Configure Snowflake Connection"
+3. Enter your Snowflake credentials when prompted
+
+### Method 2: Using a Credentials File
+
+1. Create a JSON file with your Snowflake credentials using the following format:
+   ```json
+   {
+       "user": "your_username",
+       "password": "your_password",
+       "account": "your_account",
+       "warehouse": "your_warehouse",
+       "database": "your_database",
+       "schema": "your_schema"
+   }
+   ```
+2. Open the command palette (`Ctrl+Shift+P` or `Cmd+Shift+P`)
+3. Run the command "sql-sheets: Load Snowflake Credentials from File"
+4. Select your credentials JSON file when prompted
+
+A template credentials file is provided in the `samples` directory of this extension.
 3. Click on the SQL Parameters icon in the Activity Bar (looks like a database icon)
 4. The SQL Sheet Editor pane will appear, showing the parameters for your SQL file
 5. If the view is not visible, you can also run the "Show SQL Sheet Editor" command from the Command Palette (Ctrl+Shift+P or Cmd+Shift+P)
