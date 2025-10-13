@@ -1,12 +1,11 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import { SqlSheetConfiguration } from '../models/SqlSheetConfiguration';
 import { getGoogleSheetsService } from './googleSheetsService';
 import type { SheetUploadResult } from './googleSheetsService';
 import { getSnowflakeService } from './snowflakeService';
+import { getLogger } from './loggingService';
 
-// Create a dedicated output channel for SQL Sheets logs
-const outputChannel = vscode.window.createOutputChannel('SQL Sheets');
+const logger = getLogger();
 
 /**
  * Service for exporting SQL query results to Google Sheets
@@ -33,7 +32,7 @@ export class GoogleSheetsExportService {
         } = config;
 
         if (skip) {
-            outputChannel.appendLine('Skipping query execution as "skip" is set to true.');
+            logger.info('Skipping query execution because configuration is marked skip', { audience: ['developer'] });
             return;
         }
 
@@ -52,12 +51,12 @@ export class GoogleSheetsExportService {
                 throw new Error('Sheet name cannot be empty');
             }
             // Log the sheet name for debugging
-            outputChannel.appendLine(`Using sheet name: "${sheetName}"`);
-            outputChannel.show(true);
+            logger.info(`Using sheet name: "${sheetName}"`, { audience: ['developer'] });
+            logger.revealOutput();
         } else if (typeof sheetName === 'number') {
             // Log the sheet ID for debugging
-            outputChannel.appendLine(`Using sheet ID: ${sheetName}`);
-            outputChannel.show(true);
+            logger.info(`Using sheet ID: ${sheetName}`, { audience: ['developer'] });
+            logger.revealOutput();
         }
 
         if (!startCell) {
@@ -85,8 +84,8 @@ export class GoogleSheetsExportService {
             }
 
             // Log the validated cell for debugging
-            outputChannel.appendLine(`Using start cell: ${startCell} (column: ${columnPart}, row: ${rowPart})`);
-            outputChannel.show(true);
+            logger.info(`Using start cell: ${startCell} (column: ${columnPart}, row: ${rowPart})`, { audience: ['developer'] });
+            logger.revealOutput();
         } catch (err) {
             throw new Error(`Invalid start cell format: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -106,14 +105,14 @@ export class GoogleSheetsExportService {
             }
 
             // Execute the query using the Snowflake service
-            outputChannel.appendLine('Executing query in Snowflake...');
-            outputChannel.show(true); // Show the output channel
+            logger.info('Executing query in Snowflake...', { audience: ['developer'] });
+            logger.revealOutput();
             const results = await snowflakeService.executeQuery(sqlQuery);
-            outputChannel.appendLine('Query executed successfully.');
+            logger.info('Query executed successfully.', { audience: ['developer'] });
 
             // Check if there are results to upload
             if (results.length === 0) {
-                outputChannel.appendLine('Query returned no results. Nothing to upload.');
+                logger.info('Query returned no results. Nothing to upload.', { audience: ['developer'] });
                 return;
             }
 
@@ -123,7 +122,7 @@ export class GoogleSheetsExportService {
             const dataToUpload = dataOnly ? data : [headers, ...data];
 
             // Upload the data to Google Sheets
-            outputChannel.appendLine('Uploading data to Google Sheets...');
+            logger.info('Uploading data to Google Sheets...', { audience: ['developer'] });
             const uploadResult: SheetUploadResult = await googleService.uploadDataToSheet(
                 dataToUpload,
                 spreadsheetId,
@@ -137,12 +136,12 @@ export class GoogleSheetsExportService {
                     tableName: config.table_name
                 }
             );
-            outputChannel.appendLine('Data uploaded successfully.');
+            logger.info('Data uploaded successfully.', { audience: ['developer'] });
 
             // Log the result details
-            outputChannel.appendLine(`Spreadsheet ID: ${spreadsheetId}`);
-            outputChannel.appendLine(`Sheet Name: ${sheetName}`);
-            outputChannel.appendLine(`Range: ${uploadResult.range}`);
+            logger.info(`Spreadsheet ID: ${spreadsheetId}`);
+            logger.info(`Sheet Name: ${sheetName}`);
+            logger.info(`Range: ${uploadResult.range}`);
 
             // Show a success message to the user with a link to the sheet
             const rangeParts = uploadResult.range.split('!');
@@ -158,7 +157,7 @@ export class GoogleSheetsExportService {
 
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
-            outputChannel.appendLine(`Error: ${errorMessage}`);
+            logger.error('Failed to export query to Google Sheet', { data: err });
             vscode.window.showErrorMessage(`Failed to export query to Google Sheet: ${errorMessage}`);
         }
     }

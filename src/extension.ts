@@ -11,14 +11,15 @@ import { SettingsWebviewProvider } from './views/SettingsWebviewProvider';
 import { getSqlSheetsExportViewModel } from './viewmodels/SqlSheetsExportViewModel';
 import { SqlFile } from './models/SqlFile';
 import { SqlQuery } from './models/SqlQuery';
+import { getLogger } from './services/loggingService';
+
+const logger = getLogger();
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "sql-sheets" is now active!');
+	logger.info('SQL Sheets extension activated');
 
 	// Register command to show the SQL Sheet editor
 	const showEditorCommand = vscode.commands.registerCommand('sql-sheets.showEditor', () => {
@@ -32,14 +33,14 @@ export function activate(context: vscode.ExtensionContext) {
 
 		// Check if connection is configured
 		if (!snowflakeService.isConfigured()) {
-			const loadCredentials = 'Load Credentials';
+			const loadCredentials = 'Open Settings';
 			const response = await vscode.window.showErrorMessage(
 				'Snowflake connection is not configured yet.',
 				loadCredentials
 			);
 
 			if (response === loadCredentials) {
-				vscode.commands.executeCommand('sql-sheets.loadCredentials');
+				vscode.commands.executeCommand('sql-sheets.showSettings');
 			}
 			return;
 		}
@@ -157,7 +158,7 @@ export function activate(context: vscode.ExtensionContext) {
 				try {
 					await vscode.commands.executeCommand('sql-sheets.exportQueryToSheets', query);
 				} catch (err) {
-					console.error(`Failed to export query ${index + 1}:`, err);
+					logger.error(`Failed to export query ${index + 1}`, { data: err });
 				}
 			}
 		});

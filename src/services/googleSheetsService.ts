@@ -2,9 +2,9 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { google, sheets_v4 } from 'googleapis';
 import { JWT } from 'google-auth-library';
+import { getLogger } from './loggingService';
 
-// Create a dedicated output channel for SQL Sheets logs
-const outputChannel = vscode.window.createOutputChannel('SQL Sheets');
+const logger = getLogger();
 
 type SheetWithTables = sheets_v4.Schema$Sheet & { tables?: SheetsApiTable[] };
 
@@ -99,7 +99,7 @@ export class GoogleSheetsService {
             this.serviceAccountCredentials = this.loadServiceAccountCredentials();
             return true;
         } catch (err) {
-            console.error('Failed to initialize Google Sheets service:', err);
+            logger.error('Failed to initialize Google Sheets service', { data: err, audience: ['developer', 'support'] });
             return false;
         }
     }
@@ -190,11 +190,11 @@ export class GoogleSheetsService {
                 }
 
                 // Log the parameters for debugging
-                console.log(`Uploading to sheet: "${sheetName}", starting at cell: ${column}${row}`);
+                logger.info(`Preparing upload to sheet "${sheetName}" starting at ${column}${row}`, { audience: ['developer'] });
 
                 // Create a JWT client using the service account credentials
                 progress.report({ message: 'Authenticating...' });
-                outputChannel.appendLine(`Authenticating with Google service account: ${credentials.client_email}`);
+                logger.info(`Authenticating with Google service account: ${credentials.client_email}`, { audience: ['developer'] });
 
                 const client = new JWT({
                     email: credentials.client_email,
@@ -204,11 +204,11 @@ export class GoogleSheetsService {
 
                 // Create the Google Sheets API client
                 const sheets = google.sheets({ version: 'v4', auth: client });
-                outputChannel.appendLine('Google Sheets API client created successfully');
+                logger.info('Google Sheets API client created successfully', { audience: ['developer'] });
 
                 // Verify the spreadsheet and sheet exist before proceeding
                 try {
-                    outputChannel.appendLine(`Verifying spreadsheet and sheet "${sheetName}"...`);
+                    logger.info(`Verifying spreadsheet and sheet "${sheetName}"...`, { audience: ['developer'] });
                     const spreadsheetInfo = await sheets.spreadsheets.get({
                         spreadsheetId,
                         includeGridData: false,
@@ -219,11 +219,11 @@ export class GoogleSheetsService {
                     const typedSheets = availableSheets as SheetWithTables[];
 
                     if (typedSheets.length > 0) {
-                        outputChannel.appendLine('Available sheets in this spreadsheet:');
+                        logger.info('Available sheets in this spreadsheet:', { audience: ['developer'] });
                         typedSheets.forEach(sheet => {
                             const sheetId = sheet.properties?.sheetId;
                             const sheetTitle = sheet.properties?.title;
-                            outputChannel.appendLine(`- ${sheetTitle} (ID: ${sheetId})`);
+                            logger.info(`- ${sheetTitle} (ID: ${sheetId})`, { audience: ['developer'] });
                         });
                     }
 
@@ -255,7 +255,7 @@ export class GoogleSheetsService {
                     }
 
                     if (!sheetExists && typeof sheetName === 'string' && autoCreateSheet) {
-                        outputChannel.appendLine(`Sheet "${sheetName}" not found in spreadsheet. Creating it now...`);
+                        logger.info(`Sheet "${sheetName}" not found in spreadsheet. Creating it now...`, { audience: ['developer'] });
                         try {
                             const addSheetResponse = await sheets.spreadsheets.batchUpdate({
                                 spreadsheetId,
@@ -276,24 +276,26 @@ export class GoogleSheetsService {
                             });
 
                             const newSheetId = addSheetResponse.data.replies?.[0]?.addSheet?.properties?.sheetId;
-                            outputChannel.appendLine(`Successfully created sheet "${sheetName}" with ID ${newSheetId}`);
-                            sheetExists = true;
                             if (typeof newSheetId === 'number') {
                                 targetSheetId = newSheetId;
+                                sheetExists = true;
+                                knownTables = [];
+                                logger.info(`Successfully created sheet "${sheetName}" with ID ${newSheetId}`, { audience: ['developer'] });
+                            } else {
+                                logger.warn(`Created sheet "${sheetName}" but did not receive a valid sheet ID.`, { audience: ['developer'] });
                             }
-                            knownTables = [];
                         } catch (err) {
-                            outputChannel.appendLine(`Failed to create sheet "${sheetName}": ${err instanceof Error ? err.message : String(err)}`);
+                            logger.error(`Failed to create sheet "${sheetName}"`, { data: err });
                         }
                     } else if (!sheetExists) {
-                        outputChannel.appendLine(`WARNING: Sheet with ID or name "${sheetName}" not found in spreadsheet${autoCreateSheet ? '!' : ' and auto-create disabled.'}`);
+                        logger.warn(`Sheet with ID or name "${sheetName}" not found in spreadsheet${autoCreateSheet ? '!' : ' and auto-create disabled.'}`, { audience: ['developer'] });
                     } else {
-                        outputChannel.appendLine(`Sheet "${sheetName}" found in spreadsheet.`);
+                        logger.info(`Sheet "${sheetName}" found in spreadsheet.`, { audience: ['developer'] });
                     }
                 } catch (err) {
-                    outputChannel.appendLine(`Error verifying spreadsheet/sheet: ${err instanceof Error ? err.message : String(err)}`);
+                    logger.error(`Error verifying spreadsheet/sheet: ${err instanceof Error ? err.message : String(err)}`);
                 }
-                outputChannel.show(true);
+                logger.revealOutput();
 
                 const rawTableTitle = typeof options.tableTitle === 'string' ? options.tableTitle : '';
                 const titleText = rawTableTitle.trim();
@@ -328,7 +330,7 @@ export class GoogleSheetsService {
                     titleTimestampColumnIndex = titleWidth - 1;
                     titleRow[titleTimestampColumnIndex] = executedAtValue;
 
-                    outputChannel.appendLine(`Adding title row: ${JSON.stringify(titleRow)}`);
+                    logger.debug('Title row prepared', { data: titleRow });
                     // Add title row without the empty row gap
                     processedData = [titleRow, ...processedData];
                 }
@@ -336,7 +338,7 @@ export class GoogleSheetsService {
                 // Transpose the data if requested
                 if (shouldTranspose) {
                     processedData = this.transposeData(processedData);
-                    outputChannel.appendLine(`Data transposed: now ${processedData.length} rows x ${processedData[0]?.length || 0} columns`);
+                    logger.info(`Data transposed: now ${processedData.length} rows x ${processedData[0]?.length || 0} columns`, { audience: ['developer'] });
                 }
 
                 // Calculate the range - handle sheet name differently based on type
@@ -355,7 +357,7 @@ export class GoogleSheetsService {
                     dataMaxWidth = Math.max(dataMaxWidth, row ? row.length : 0);
                 });
 
-                outputChannel.appendLine(`Data dimensions before range calculation: ${processedData.length} rows x max width ${dataMaxWidth}`);
+                logger.info(`Data dimensions before range calculation: ${processedData.length} rows x max width ${dataMaxWidth}`, { audience: ['developer'] });
 
                 // Calculate the end cell coordinates based on data dimensions
                 const endRow = row + processedData.length - 1;
@@ -373,7 +375,7 @@ export class GoogleSheetsService {
 
                 // Build the range manually instead of using calculateRange
                 const range = `${rangePrefix}!${column}${row}:${endColumn}${endRow}`;
-                outputChannel.appendLine(`Calculated range: ${range}`);
+                logger.info(`Calculated range: ${range}`, { audience: ['developer'] });
 
                 // Upload the data
                 progress.report({ message: 'Uploading data...' });
@@ -389,46 +391,43 @@ export class GoogleSheetsService {
                 };
 
                 // Log the request payload for debugging
-                outputChannel.appendLine('Google Sheets API Request:');
-
-                // Log data width stats to help diagnose range issues
                 const rowWidths = processedData.map(row => row ? row.length : 0);
                 const minRowWidth = Math.min(...rowWidths);
                 const maxRowWidth = Math.max(...rowWidths);
 
-                outputChannel.appendLine(JSON.stringify({
-                    spreadsheetId: requestPayload.spreadsheetId,
-                    range: requestPayload.range,
-                    valueInputOption: requestPayload.valueInputOption,
-                    dataSize: {
-                        rows: processedData.length,
-                        columns: processedData.length > 0 ? processedData[0].length : 0,
-                        minWidth: minRowWidth,
-                        maxWidth: maxRowWidth,
-                        isJagged: minRowWidth !== maxRowWidth
-                    },
-                    // Include a more detailed preview
-                    preview: processedData.slice(0, 3).map((row, i) => {
-                        return {
+                logger.info('Dispatching Google Sheets API request');
+                logger.debug('Google Sheets API request payload', {
+                    data: {
+                        spreadsheetId: requestPayload.spreadsheetId,
+                        range: requestPayload.range,
+                        valueInputOption: requestPayload.valueInputOption,
+                        dataSize: {
+                            rows: processedData.length,
+                            columns: processedData.length > 0 ? processedData[0].length : 0,
+                            minWidth: minRowWidth,
+                            maxWidth: maxRowWidth,
+                            isJagged: minRowWidth !== maxRowWidth
+                        },
+                        preview: processedData.slice(0, 3).map((row, i) => ({
                             rowIndex: i,
                             length: row ? row.length : 0,
                             content: row ? row.slice(0, Math.min(5, row.length)) : []
-                        };
-                    })
-                }, null, 2));
-                outputChannel.show(true);
+                        }))
+                    }
+                });
+                logger.revealOutput();
 
                 // Clear existing content and formatting in the continuous range
                 try {
-                    outputChannel.appendLine('Starting to clear continuous range...');
+                    logger.info('Starting to clear continuous range...');
                     const resolvedSheetId = typeof targetSheetId === 'number'
                         ? targetSheetId
                         : await this.getSheetId(sheets, spreadsheetId, sheetName.toString());
                     targetSheetId = resolvedSheetId;
-                    outputChannel.appendLine(`Got sheet ID: ${resolvedSheetId} for sheet: ${sheetName}`);
+                    logger.info(`Got sheet ID: ${resolvedSheetId} for sheet: ${sheetName}`);
 
                     // Log the parameters being passed to clearContinuousRange
-                    outputChannel.appendLine(`Clearing range starting at column: ${column}, row: ${row}, data size: ${processedData.length} x ${processedData[0]?.length || 0}`);
+                    logger.info(`Clearing range starting at column: ${column}, row: ${row}, data size: ${processedData.length} x ${processedData[0]?.length || 0}`);
 
                     await this.clearContinuousRange(
                         sheets,
@@ -438,27 +437,27 @@ export class GoogleSheetsService {
                         row,
                         processedData
                     );
-                    outputChannel.appendLine('Successfully cleared existing content and formatting in the target range');
+                    logger.info('Successfully cleared existing content and formatting in the target range', { audience: ['developer'] });
                 } catch (err) {
-                    outputChannel.appendLine(`Warning: Failed to clear existing content and formatting: ${err instanceof Error ? err.message : String(err)}`);
+                    logger.warn('Failed to clear existing content and formatting before upload', { data: err });
                     if (err instanceof Error && err.stack) {
-                        outputChannel.appendLine(`Stack trace: ${err.stack}`);
+                        logger.debug('Clear range stack trace', { data: err.stack });
                     }
                     // Continue with the update even if clearing fails
                 }
 
                 // Make the API call to update with new data
                 try {
-                    outputChannel.appendLine(`Making API call to update range: ${requestPayload.range}`);
+                    logger.info(`Making API call to update range: ${requestPayload.range}`);
                     const response = await sheets.spreadsheets.values.update(requestPayload);
-                    outputChannel.appendLine(`API call successful. Updated ${response.data.updatedCells} cells.`);
+                    logger.info(`API call successful. Updated ${response.data.updatedCells} cells.`);
                 } catch (err) {
                     // Get detailed error information
-                    outputChannel.appendLine(`Google Sheets API Error: ${err instanceof Error ? err.message : String(err)}`);
+                    logger.warn(`Google Sheets API Error: ${err instanceof Error ? err.message : String(err)}`);
                     if (err instanceof Error && 'response' in err) {
                         const apiError = err as any;
                         if (apiError.response?.data?.error) {
-                            outputChannel.appendLine(`API Error Details: ${JSON.stringify(apiError.response.data.error, null, 2)}`);
+                            logger.debug('Google Sheets API error details', { data: apiError.response.data.error });
 
                             // Check for specific error messages
                             const errorMessage = apiError.response?.data?.error?.message;
@@ -515,14 +514,14 @@ export class GoogleSheetsService {
                         );
                     } catch (err) {
                         const message = err instanceof Error ? err.message : String(err);
-                        outputChannel.appendLine(`Warning: Failed to configure table "${tableName}": ${message}`);
+                        logger.warn(`Failed to configure table "${tableName}"`, { data: err });
                     }
                 }
 
-                outputChannel.appendLine(
+                logger.info(
                     `Successfully uploaded data to spreadsheet ${spreadsheetId}, sheet ${sheetName}, starting at ${startCell}`
                 );
-                outputChannel.show(true);
+                logger.revealOutput();
 
                 return {
                     range,
@@ -533,7 +532,7 @@ export class GoogleSheetsService {
             vscode.window.showErrorMessage(
                 `Failed to upload data to Google Sheets: ${err instanceof Error ? err.message : String(err)}`
             );
-            console.error('Google Sheets upload error:', err);
+            logger.error('Google Sheets upload error', { data: err });
             throw err;
         }
     }
@@ -638,22 +637,22 @@ export class GoogleSheetsService {
 
             // Handle empty data case
             if (!data) {
-                outputChannel.appendLine('Warning: Null data provided to calculateRange');
+                logger.warn('Null data provided to calculateRange');
                 return `${escapedSheetName}!${column}${row}`;
             }
 
             if (data.length === 0) {
-                outputChannel.appendLine('Warning: Empty data array provided to calculateRange');
+                logger.warn('Empty data array provided to calculateRange');
                 return `${escapedSheetName}!${column}${row}`;
             }
 
             if (!data[0]) {
-                outputChannel.appendLine('Warning: First row of data is null in calculateRange');
+                logger.warn('First row of data is null in calculateRange');
                 return `${escapedSheetName}!${column}${row}`;
             }
 
             if (data[0].length === 0) {
-                outputChannel.appendLine('Warning: First row of data is empty in calculateRange');
+                logger.warn('First row of data is empty in calculateRange');
                 return `${escapedSheetName}!${column}${row}`;
             }
 
@@ -666,7 +665,7 @@ export class GoogleSheetsService {
             if (/^\d+$/.test(sheetName)) {
                 // For numeric sheet IDs, don't use quotes in the range
                 rangePrefix = `${sheetName}`;
-                outputChannel.appendLine(`Using numeric sheet ID: ${sheetName}`);
+                logger.info(`Using numeric sheet ID: ${sheetName}`);
             } else {
                 // For named sheets, Google requires specific escaping of names
                 // Single quotes are required for names with spaces or special characters
@@ -674,11 +673,11 @@ export class GoogleSheetsService {
                 if (/[^a-zA-Z0-9_]/.test(sheetName) || /^\d/.test(sheetName)) {
                     // Names with spaces, special chars, or starting with a digit need quotes
                     rangePrefix = `'${sheetName.replace(/'/g, "''")}'`;
-                    outputChannel.appendLine(`Using quoted sheet name (has special chars): '${sheetName}'`);
+                    logger.info(`Using quoted sheet name (has special chars): '${sheetName}'`);
                 } else {
                     // Simple names might work better without quotes
                     rangePrefix = sheetName;
-                    outputChannel.appendLine(`Using unquoted sheet name (simple name): ${sheetName}`);
+                    logger.info(`Using unquoted sheet name (simple name): ${sheetName}`);
                 }
             }
 
@@ -686,24 +685,25 @@ export class GoogleSheetsService {
             const range = `${rangePrefix}!${column}${row}:${endColumn}${endRow}`;
 
             // Log detailed information about the range calculation
-            outputChannel.appendLine(`Range Calculation Details:`);
-            outputChannel.appendLine(JSON.stringify({
-                original: {
-                    sheetName,
-                    startColumn: column,
-                    startRow: row,
-                    dataRows: data.length,
-                    dataColumns: data[0].length
-                },
-                calculated: {
-                    escapedSheetName,
-                    rangePrefix,
-                    endColumn,
-                    endRow,
-                    finalRange: range
+            logger.debug('Range calculation details', {
+                data: {
+                    original: {
+                        sheetName,
+                        startColumn: column,
+                        startRow: row,
+                        dataRows: data.length,
+                        dataColumns: data[0].length
+                    },
+                    calculated: {
+                        escapedSheetName,
+                        rangePrefix,
+                        endColumn,
+                        endRow,
+                        finalRange: range
+                    }
                 }
-            }, null, 2));
-            outputChannel.show(true); // Show the output channel
+            });
+            logger.revealOutput();
 
             return range;
         } catch (err) {
@@ -790,24 +790,24 @@ export class GoogleSheetsService {
         }
 
         if (options.transpose) {
-            outputChannel.appendLine(`convertRangeToSheetTable: Skipping table creation for "${trimmedTableName}" because data is transposed.`);
+            logger.info(`convertRangeToSheetTable: Skipping table creation for "${trimmedTableName}" because data is transposed.`);
             return;
         }
 
         if (options.dataOnly) {
-            outputChannel.appendLine(`convertRangeToSheetTable: Skipping table creation for "${trimmedTableName}" because data_only is true.`);
+            logger.info(`convertRangeToSheetTable: Skipping table creation for "${trimmedTableName}" because data_only is true.`);
             return;
         }
 
         const dataStartIndex = options.hasTitleRow ? 1 : 0;
         if (data.length <= dataStartIndex) {
-            outputChannel.appendLine(`convertRangeToSheetTable: Unable to locate a header row for table "${trimmedTableName}".`);
+            logger.info(`convertRangeToSheetTable: Unable to locate a header row for table "${trimmedTableName}".`);
             return;
         }
 
         const tableRows = data.length - dataStartIndex;
         if (tableRows <= 0) {
-            outputChannel.appendLine(`convertRangeToSheetTable: No data rows detected for table "${trimmedTableName}".`);
+            logger.info(`convertRangeToSheetTable: No data rows detected for table "${trimmedTableName}".`);
             return;
         }
 
@@ -817,7 +817,7 @@ export class GoogleSheetsService {
         }, 0);
 
         if (tableWidth === 0) {
-            outputChannel.appendLine(`convertRangeToSheetTable: No columns detected for table "${trimmedTableName}".`);
+            logger.info(`convertRangeToSheetTable: No columns detected for table "${trimmedTableName}".`);
             return;
         }
 
@@ -860,7 +860,7 @@ export class GoogleSheetsService {
         const requests: SheetsTableRequest[] = [];
 
         if (existingTable?.tableId) {
-            outputChannel.appendLine(`convertRangeToSheetTable: Updating existing table "${trimmedTableName}" (ID: ${existingTable.tableId}) to range ${readableRange}.`);
+            logger.info(`convertRangeToSheetTable: Updating existing table "${trimmedTableName}" (ID: ${existingTable.tableId}) to range ${readableRange}.`);
             requests.push({
                 updateTable: {
                     table: {
@@ -871,7 +871,7 @@ export class GoogleSheetsService {
                 }
             });
         } else {
-            outputChannel.appendLine(`convertRangeToSheetTable: Adding table "${trimmedTableName}" at range ${readableRange}.`);
+            logger.info(`convertRangeToSheetTable: Adding table "${trimmedTableName}" at range ${readableRange}.`);
             requests.push({
                 addTable: {
                     table: tableSpec
@@ -880,7 +880,7 @@ export class GoogleSheetsService {
         }
 
         if (requests.length === 0) {
-            outputChannel.appendLine(`convertRangeToSheetTable: No table requests prepared for "${trimmedTableName}".`);
+            logger.info(`convertRangeToSheetTable: No table requests prepared for "${trimmedTableName}".`);
             return;
         }
 
@@ -891,7 +891,7 @@ export class GoogleSheetsService {
             }
         });
 
-        outputChannel.appendLine(`convertRangeToSheetTable: Table "${trimmedTableName}" configured successfully.`);
+        logger.info(`convertRangeToSheetTable: Table "${trimmedTableName}" configured successfully.`);
     }
 
     private buildTableColumnProperties(
@@ -970,14 +970,14 @@ export class GoogleSheetsService {
         } = {}
     ): Promise<void> {
         if (data.length === 0) {
-            outputChannel.appendLine('applyFormatting: no data supplied, skipping.');
+            logger.info('applyFormatting: no data supplied, skipping.');
             return;
         }
 
         const totalRows = data.length;
         const dataStartIndex = hasTitleRow ? 1 : 0;
         if (totalRows <= dataStartIndex) {
-            outputChannel.appendLine('applyFormatting: unable to locate header row, skipping.');
+            logger.info('applyFormatting: unable to locate header row, skipping.');
             return;
         }
 
@@ -987,7 +987,7 @@ export class GoogleSheetsService {
         }, 0);
 
         if (columnCount === 0) {
-            outputChannel.appendLine('applyFormatting: no columns detected, skipping.');
+            logger.info('applyFormatting: no columns detected, skipping.');
             return;
         }
 
@@ -1189,7 +1189,7 @@ export class GoogleSheetsService {
      * @returns Format clearing request object for batch update
      */
     private createClearFormatsRequest(sheetId: number, startRow: number, startCol: number, endRow: number, endCol: number): any {
-        outputChannel.appendLine(`Creating clear formats request for sheetId=${sheetId}, startRow=${startRow}, startCol=${startCol}, endRow=${endRow}, endCol=${endCol}`);
+        logger.info(`Creating clear formats request for sheetId=${sheetId}, startRow=${startRow}, startCol=${startCol}, endRow=${endRow}, endCol=${endCol}`);
 
         return {
             repeatCell: {
@@ -1241,12 +1241,12 @@ export class GoogleSheetsService {
         startRow: number,
         newData: any[][]
     ): Promise<void> {
-        outputChannel.appendLine(`clearContinuousRange called with: sheetId=${sheetId}, startColumn=${startColumn}, startRow=${startRow}`);
+        logger.info(`clearContinuousRange called with: sheetId=${sheetId}, startColumn=${startColumn}, startRow=${startRow}`);
 
         // Get the dimensions of the new data
         const numDataRows = newData.length;
         const numCols = newData.length > 0 ? newData[0].length : 0;
-        outputChannel.appendLine(`New data dimensions: ${numDataRows} rows x ${numCols} columns`);
+        logger.info(`New data dimensions: ${numDataRows} rows x ${numCols} columns`);
 
         try {
             // Get the sheet name for the range
@@ -1263,7 +1263,7 @@ export class GoogleSheetsService {
                 throw new Error(`Could not find sheet with ID ${sheetId}`);
             }
 
-            outputChannel.appendLine(`Working with sheet: "${sheetTitle}" (ID: ${sheetId})`);
+            logger.info(`Working with sheet: "${sheetTitle}" (ID: ${sheetId})`);
 
             // Properly format the sheet name for A1 notation
             let rangePrefix: string;
@@ -1275,7 +1275,7 @@ export class GoogleSheetsService {
 
             // Get all values from the worksheet to determine the continuous range
             const rangeToFetch = `${rangePrefix}!${startColumn}${startRow}:ZZ10000`;
-            outputChannel.appendLine(`Fetching sheet values from ${rangeToFetch}`);
+            logger.info(`Fetching sheet values from ${rangeToFetch}`);
 
             const response = await sheets.spreadsheets.values.get({
                 spreadsheetId,
@@ -1286,15 +1286,15 @@ export class GoogleSheetsService {
             const allValues = response.data.values || [];
             const maxRow = allValues.length;
             const maxCol = Math.max(...allValues.map(row => row.length), 0);
-            outputChannel.appendLine(`Fetched ${maxRow} rows and max width of ${maxCol} columns from the sheet`);
+            logger.info(`Fetched ${maxRow} rows and max width of ${maxCol} columns from the sheet`);
 
             // Convert start column letter to index (0-based)
             const startColIndex = this.columnToIndex(startColumn);
-            outputChannel.appendLine(`Start column "${startColumn}" converted to 0-based index: ${startColIndex}`);
+            logger.info(`Start column "${startColumn}" converted to 0-based index: ${startColIndex}`);
 
             // If the sheet is empty or we're starting beyond existing data
             if (maxRow === 0) {
-                outputChannel.appendLine("Sheet appears to be empty, no need to clear anything");
+                logger.info("Sheet appears to be empty, no need to clear anything");
                 return;
             }
 
@@ -1326,21 +1326,21 @@ export class GoogleSheetsService {
             const clearEndColIndex = Math.max(startColIndex + lastDataCol, startColIndex + numCols);
             const clearEndColLetter = this.indexToColumn(clearEndColIndex);
 
-            outputChannel.appendLine(`Determined data ranges: last data row=${lastDataRow}, last data col=${lastDataCol}`);
-            outputChannel.appendLine(`Clearing range from ${startColumn}${startRow} to ${clearEndColLetter}${clearEndRow}`);
+            logger.info(`Determined data ranges: last data row=${lastDataRow}, last data col=${lastDataCol}`);
+            logger.info(`Clearing range from ${startColumn}${startRow} to ${clearEndColLetter}${clearEndRow}`);
 
             // Create the A1 range notation
             const clearRange = `${rangePrefix}!${startColumn}${startRow}:${clearEndColLetter}${clearEndRow}`;
 
             // First, clear the values
-            outputChannel.appendLine(`Clearing values in range: ${clearRange}`);
+            logger.info(`Clearing values in range: ${clearRange}`);
             await sheets.spreadsheets.values.clear({
                 spreadsheetId,
                 range: clearRange
             });
 
             // Then, clear the formatting
-            outputChannel.appendLine(`Clearing formatting in range: ${clearRange}`);
+            logger.info(`Clearing formatting in range: ${clearRange}`, { audience: ['developer'] });
             await sheets.spreadsheets.batchUpdate({
                 spreadsheetId,
                 requestBody: {
@@ -1356,17 +1356,17 @@ export class GoogleSheetsService {
                 }
             });
 
-            outputChannel.appendLine(`Successfully cleared both values and formatting in range: ${clearRange}`);
+            logger.info(`Successfully cleared both values and formatting in range: ${clearRange}`);
 
         } catch (err) {
-            outputChannel.appendLine(`Error clearing continuous range: ${err instanceof Error ? err.message : String(err)}`);
+            logger.warn(`Error clearing continuous range: ${err instanceof Error ? err.message : String(err)}`);
             if (err instanceof Error && err.stack) {
-                outputChannel.appendLine(`Stack trace: ${err.stack}`);
+                logger.debug('clearContinuousRange stack trace', { data: err.stack });
             }
 
             // Fallback to clearing just the area of the new data
             try {
-                outputChannel.appendLine(`Attempting fallback clearing method...`);
+                logger.info(`Attempting fallback clearing method...`);
                 // Calculate the end position based on the new data dimensions
                 const endRow = startRow + numDataRows - 1;
                 const endColIndex = this.columnToIndex(startColumn) + numCols;
@@ -1374,7 +1374,7 @@ export class GoogleSheetsService {
 
                 // Define the fallback range in A1 notation
                 const fallbackRange = `${startColumn}${startRow}:${endColumnLetter}${endRow}`;
-                outputChannel.appendLine(`Fallback range: ${fallbackRange}`);
+                logger.info(`Fallback range: ${fallbackRange}`);
 
                 // Clear the values
                 await sheets.spreadsheets.values.clear({
@@ -1398,11 +1398,11 @@ export class GoogleSheetsService {
                     }
                 });
 
-                outputChannel.appendLine(`Successfully cleared fallback range: ${fallbackRange}`);
+                logger.info(`Successfully cleared fallback range: ${fallbackRange}`);
             } catch (fallbackErr) {
-                outputChannel.appendLine(`Failed to clear fallback range: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+                logger.warn(`Failed to clear fallback range: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
                 if (fallbackErr instanceof Error && fallbackErr.stack) {
-                    outputChannel.appendLine(`Stack trace: ${fallbackErr.stack}`);
+                    logger.debug('Fallback clear stack trace', { data: fallbackErr.stack });
                 }
                 throw fallbackErr;
             }

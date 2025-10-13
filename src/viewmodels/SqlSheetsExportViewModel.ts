@@ -3,6 +3,9 @@ import { getGoogleSheetsExportService } from '../services/googleSheetsExportServ
 import { getSnowflakeService } from '../services/snowflakeService';
 import { SqlQuery } from '../models/SqlQuery';
 import { SqlSheetConfiguration } from '../models/SqlSheetConfiguration';
+import { getLogger } from '../services/loggingService';
+
+const logger = getLogger();
 
 /**
  * ViewModel for SQL to Sheets export functionality
@@ -21,7 +24,7 @@ export class SqlSheetsExportViewModel {
             }
 
             if (sqlQuery.config.skip) {
-                console.log('Skipping query export because the configuration is marked to skip.');
+                logger.info('Skipping query export because the configuration is marked to skip.');
                 return;
             }
 
@@ -32,8 +35,8 @@ export class SqlSheetsExportViewModel {
                 if (isCreateStatement) {
                     await this._executeCreateStatement(sqlQuery.queryText);
                 } else {
-                    vscode.window.showInformationMessage(
-                        'Skipping query export because spreadsheet_id, sheet_name, and start_cell are required.'
+                    logger.info(
+                        'Skipping query export because spreadsheet_id, sheet_name, and start_cell are required.', { audience: ['support'] }
                     );
                 }
                 return;
@@ -51,13 +54,14 @@ export class SqlSheetsExportViewModel {
             const exportService = getGoogleSheetsExportService();
             await exportService.exportQueryToSheet(sqlQuery.queryText, completedConfig);
         } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            logger.error('Failed to export SQL query via view model', { data: err });
             vscode.window.showErrorMessage(
-                `Failed to export SQL query to Google Sheets: ${err instanceof Error ? err.message : String(err)}`
+                `Failed to export SQL query to Google Sheets: ${errorMessage}`
             );
-            console.error(err);
         }
     }
-    
+
     /**
      * Prompts the user for any missing required configuration values.
      * @param config The partially filled configuration.
@@ -152,8 +156,9 @@ export class SqlSheetsExportViewModel {
                 await snowflakeService.executeQuery(queryText);
                 vscode.window.showInformationMessage('CREATE statement executed successfully.');
             } catch (err) {
-                vscode.window.showErrorMessage(`Failed to execute CREATE statement: ${err instanceof Error ? err.message : String(err)}`);
-                console.error(err);
+                const errorMessage = err instanceof Error ? err.message : String(err);
+                logger.error('Failed to execute CREATE statement', { data: err });
+                vscode.window.showErrorMessage(`Failed to execute CREATE statement: ${errorMessage}`);
             }
         });
     }
