@@ -33,7 +33,7 @@ export class SqlSheetsExportViewModel {
                     await this._executeCreateStatement(sqlQuery.queryText);
                 } else {
                     vscode.window.showInformationMessage(
-                        'Skipping query export because spreadsheet_id, sheet_name, and start_cell are required.'
+                        'Skipping query export because spreadsheet_id, sheet_name, and a start location (start_cell or start_named_range) are required.'
                     );
                 }
                 return;
@@ -72,6 +72,7 @@ export class SqlSheetsExportViewModel {
             spreadsheet_id,
             sheet_name,
             start_cell,
+            start_named_range,
             name,
             transpose,
             data_only,
@@ -93,7 +94,7 @@ export class SqlSheetsExportViewModel {
             if (sheet_name === undefined) { return undefined; }
         }
 
-        if (!start_cell) {
+        if (!start_cell && !start_named_range) {
             start_cell = await vscode.window.showInputBox({
                 prompt: 'Enter the start cell',
                 value: 'A1',
@@ -106,7 +107,7 @@ export class SqlSheetsExportViewModel {
             spreadsheet_id,
             sheet_name,
             start_cell,
-            config.start_named_range,
+            start_named_range,
             name || defaultTableTitle,
             config.table_name,
             config.pre_file,
@@ -120,8 +121,9 @@ export class SqlSheetsExportViewModel {
         const hasSpreadsheetId = typeof config.spreadsheet_id === 'string' && config.spreadsheet_id.trim().length > 0;
         const hasSheetName = typeof config.sheet_name === 'string' && config.sheet_name.trim().length > 0;
         const hasStartCell = typeof config.start_cell === 'string' && config.start_cell.trim().length > 0;
+        const hasStartNamedRange = typeof config.start_named_range === 'string' && config.start_named_range.trim().length > 0;
 
-        return hasSpreadsheetId && hasSheetName && hasStartCell;
+        return hasSpreadsheetId && hasSheetName && (hasStartCell || hasStartNamedRange);
     }
 
     private _isCreateStatement(queryText: string): boolean {
