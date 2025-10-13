@@ -125,6 +125,61 @@ function updateGrid(config) {
             return;
         }
 
+        if (key === 'sheet_name') {
+            const sheetIdValue = safeConfig['sheet_id'] !== undefined && safeConfig['sheet_id'] !== null
+                ? String(safeConfig['sheet_id'])
+                : '';
+            const sheetNameValue = safeConfig[key] || '';
+
+            const container = document.createElement('div');
+            container.className = 'sheet-name-fields';
+
+            const sheetIdField = document.createElement('vscode-text-field');
+            sheetIdField.id = `field-${key}-id`;
+            sheetIdField.value = sheetIdValue;
+            sheetIdField.placeholder = 'Sheet ID (gid)';
+            if (descriptions[key]) {
+                sheetIdField.title = descriptions[key];
+            }
+
+            const sheetNameField = document.createElement('vscode-text-field');
+            sheetNameField.id = `field-${key}`;
+            sheetNameField.value = sheetNameValue;
+            sheetNameField.placeholder = 'Sheet name';
+            if (descriptions[key]) {
+                sheetNameField.title = descriptions[key];
+            }
+
+            const emitSheetUpdate = () => {
+                const idPart = (sheetIdField.value || '').trim();
+                const namePart = (sheetNameField.value || '').trim();
+                let combined = '';
+                if (idPart && namePart) {
+                    combined = `${idPart} | ${namePart}`;
+                } else if (idPart) {
+                    combined = idPart;
+                } else {
+                    combined = namePart;
+                }
+
+                vscode.postMessage({
+                    type: 'edit',
+                    key: key,
+                    value: combined
+                });
+            };
+
+            sheetIdField.addEventListener('change', emitSheetUpdate);
+            sheetNameField.addEventListener('change', emitSheetUpdate);
+
+            container.appendChild(sheetIdField);
+            container.appendChild(sheetNameField);
+
+            form.appendChild(label);
+            form.appendChild(container);
+            return;
+        }
+
         // Create appropriate field based on parameter type
         if (type === 'boolean') {
             field = document.createElement('vscode-dropdown');

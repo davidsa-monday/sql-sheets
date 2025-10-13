@@ -56,6 +56,7 @@ export interface SheetUploadResult {
     startNamedRange?: string;
     namedRangeCreated?: boolean;
     namedRangeUpdated?: boolean;
+    sheetName?: string;
 }
 
 /**
@@ -690,7 +691,8 @@ export class GoogleSheetsService {
                     startRow,
                     startNamedRange: startNamedRange || undefined,
                     namedRangeCreated,
-                    namedRangeUpdated
+                    namedRangeUpdated,
+                    sheetName: resolvedSheetName ?? (typeof sheetName === 'string' ? sheetName : undefined)
                 };
             });
         } catch (err) {

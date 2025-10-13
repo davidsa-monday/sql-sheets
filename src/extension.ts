@@ -129,7 +129,7 @@ export function activate(context: vscode.ExtensionContext) {
 			case ExportResult.Exported:
 				return result;
 			case ExportResult.SkippedMissingConfig:
-				vscode.window.showWarningMessage('Please add spreadsheet_id, sheet_name, and a start cell or named range before exporting.');
+				vscode.window.showWarningMessage('Please add spreadsheet_id, a sheet ID or sheet name, and a start cell or named range before exporting.');
 				return result;
 			case ExportResult.UserCancelled:
 				return result;
@@ -174,6 +174,9 @@ export function activate(context: vscode.ExtensionContext) {
 				progress.report({ message: `Exporting query ${index + 1} of ${sqlFile.queries.length}...` });
 				try {
 					const result = await vscode.commands.executeCommand<ExportResult>('sql-sheets.exportQueryToSheets', query);
+					if (!result) {
+						continue;
+					}
 					switch (result) {
 						case ExportResult.SkippedMissingConfig:
 							skippedMissingConfigCount++;

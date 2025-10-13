@@ -48,7 +48,7 @@ export class SqlSheetsExportViewModel {
                 }
 
                 logger.info(
-                    'Skipping query export because spreadsheet_id, sheet_name, and a start cell or named range are required.',
+                    'Skipping query export because spreadsheet_id, sheet identifier, and a start cell or named range are required.',
                     { audience: ['support'] }
                 );
                 return ExportResult.SkippedMissingConfig;
@@ -79,7 +79,7 @@ export class SqlSheetsExportViewModel {
             vscode.window.showErrorMessage(
                 `Failed to export SQL query to Google Sheets: ${errorMessage}`
             );
-            throw err;
+            return ExportResult.UserCancelled;
         }
     }
 
@@ -96,12 +96,23 @@ export class SqlSheetsExportViewModel {
         let {
             spreadsheet_id,
             sheet_name,
+            sheet_id,
             start_cell,
             name,
             transpose,
             data_only,
         } = config;
         let startNamedRange = config.start_named_range;
+
+        if (sheet_name) {
+            const parsedExistingSheet = SqlSheetConfiguration.parseSheetNameParameter(sheet_name);
+            if (parsedExistingSheet.sheetId !== undefined && sheet_id === undefined) {
+                sheet_id = parsedExistingSheet.sheetId;
+            }
+            if (parsedExistingSheet.sheetName) {
+                sheet_name = parsedExistingSheet.sheetName;
+            }
+        }
 
         if (!spreadsheet_id) {
             spreadsheet_id = await vscode.window.showInputBox({
@@ -111,12 +122,22 @@ export class SqlSheetsExportViewModel {
             if (spreadsheet_id === undefined) { return undefined; }
         }
 
-        if (!sheet_name) {
-            sheet_name = await vscode.window.showInputBox({
-                prompt: 'Enter the sheet name or ID',
-                validateInput: value => value ? null : 'Sheet name or ID is required'
+        if (!sheet_name && sheet_id === undefined) {
+            const sheetInput = await vscode.window.showInputBox({
+                prompt: 'Enter the sheet identifier (ID or "ID | Name")',
+                value: SqlSheetConfiguration.formatSheetNameParameter(sheet_id, sheet_name),
+                validateInput: value => {
+                    if (!value || value.trim().length === 0) {
+                        return 'Sheet ID or name is required';
+                    }
+                    return null;
+                }
             });
-            if (sheet_name === undefined) { return undefined; }
+            if (sheetInput === undefined) { return undefined; }
+
+            const parsedSheet = SqlSheetConfiguration.parseSheetNameParameter(sheetInput);
+            sheet_id = parsedSheet.sheetId;
+            sheet_name = parsedSheet.sheetName ?? (!parsedSheet.sheetId ? sheetInput : undefined);
         }
 
         if (!start_cell && !startNamedRange) {
@@ -144,6 +165,7 @@ export class SqlSheetsExportViewModel {
         return new SqlSheetConfiguration(
             spreadsheet_id,
             sheet_name,
+            sheet_id,
             start_cell,
             startNamedRange,
             name || defaultTableTitle,
@@ -157,10 +179,10 @@ export class SqlSheetsExportViewModel {
 
     private _hasRequiredConfig(config: SqlSheetConfiguration): boolean {
         const hasSpreadsheetId = typeof config.spreadsheet_id === 'string' && config.spreadsheet_id.trim().length > 0;
-        const hasSheetName = typeof config.sheet_name === 'string' && config.sheet_name.trim().length > 0;
+        const hasSheetIdentifier = config.hasSheetIdentifier();
         const hasStartLocation = config.hasStartLocation();
 
-        return hasSpreadsheetId && hasSheetName && hasStartLocation;
+        return hasSpreadsheetId && hasSheetIdentifier && hasStartLocation;
     }
 
     private _isCreateStatement(queryText: string): boolean {
@@ -213,6 +235,7 @@ export class SqlSheetsExportViewModel {
         return new SqlSheetConfiguration(
             config.spreadsheet_id,
             config.sheet_name,
+            config.sheet_id,
             config.start_cell,
             generatedName,
             config.name,
@@ -231,7 +254,9 @@ export class SqlSheetsExportViewModel {
         const editor = vscode.window.activeTextEditor;
         const sqlFilePath = editor?.document?.uri.fsPath ?? 'unknown-sql-file';
         const tableTitle = config.name ?? config.table_name ?? 'SQL Query Result';
-        const sheetIdentifier = config.sheet_name ?? '';
+        const sheetIdentifier = config.sheet_id !== undefined
+            ? config.sheet_id.toString()
+            : (config.sheet_name ?? '');
         const startCell = config.start_cell ?? '';
 
         const seed = `${sqlFilePath}|${tableTitle}|${sheetIdentifier}|${startCell}|${query.startOffset}|${query.endOffset}`;
@@ -258,18 +283,31 @@ export class SqlSheetsExportViewModel {
             query.config.start_cell
         );
 
-        if (newCombinedValue.length === 0 || newCombinedValue === existingCombinedValue) {
-            return;
-        }
-
         const editor = vscode.window.activeTextEditor;
         if (!editor || (editor.document.languageId !== 'sql' && editor.document.languageId !== 'snowflake-sql')) {
             return;
         }
 
         const sqlFile = new SqlFile(editor.document);
-        await sqlFile.updateParameter(query, 'start_cell', newCombinedValue);
-        logger.info(`Updated start_cell parameter to "${newCombinedValue}" in SQL file.`, { audience: ['developer'] });
+
+        if (newCombinedValue !== existingCombinedValue) {
+            await sqlFile.updateParameter(query, 'start_cell', newCombinedValue);
+            logger.info(`Updated start_cell parameter to "${newCombinedValue}" in SQL file.`, { audience: ['developer'] });
+        }
+
+        const newSheetParameter = SqlSheetConfiguration.formatSheetNameParameter(
+            uploadResult.sheetId ?? query.config.sheet_id,
+            uploadResult.sheetName ?? query.config.sheet_name
+        );
+        const existingSheetParameter = SqlSheetConfiguration.formatSheetNameParameter(
+            query.config.sheet_id,
+            query.config.sheet_name
+        );
+
+        if (newSheetParameter !== existingSheetParameter && newSheetParameter.length > 0) {
+            await sqlFile.updateParameter(query, 'sheet_name', newSheetParameter);
+            logger.info(`Updated sheet_name parameter to "${newSheetParameter}" in SQL file.`, { audience: ['developer'] });
+        }
     }
 }
 

@@ -24,6 +24,7 @@ export class GoogleSheetsExportService {
         const {
             spreadsheet_id: spreadsheetId,
             sheet_name: sheetName,
+            sheet_id: sheetId,
             start_cell: startCell,
             start_named_range: startNamedRange,
             name: tableTitle,
@@ -47,19 +48,15 @@ export class GoogleSheetsExportService {
         if (!spreadsheetId) {
             throw new Error('Spreadsheet ID is required');
         }
-        if (!sheetName) {
+        const sheetIdentifier = sheetId !== undefined ? sheetId : sheetName;
+        if (sheetIdentifier === undefined || (typeof sheetIdentifier === 'string' && sheetIdentifier.trim() === '')) {
             throw new Error('Sheet name or ID is required');
         }
-        if (typeof sheetName === 'string') {
-            if (sheetName.trim() === '') {
-                throw new Error('Sheet name cannot be empty');
-            }
-            // Log the sheet name for debugging
-            logger.info(`Using sheet name: "${sheetName}"`, { audience: ['developer'] });
+        if (typeof sheetIdentifier === 'string') {
+            logger.info(`Using sheet name: "${sheetIdentifier}"`, { audience: ['developer'] });
             logger.revealOutput();
-        } else if (typeof sheetName === 'number') {
-            // Log the sheet ID for debugging
-            logger.info(`Using sheet ID: ${sheetName}`, { audience: ['developer'] });
+        } else {
+            logger.info(`Using sheet ID: ${sheetIdentifier}`, { audience: ['developer'] });
             logger.revealOutput();
         }
 
@@ -134,7 +131,7 @@ export class GoogleSheetsExportService {
             const uploadResult: SheetUploadResult = await googleService.uploadDataToSheet(
                 dataToUpload,
                 spreadsheetId,
-                sheetName,
+                sheetIdentifier,
                 cleanedStartCell,
                 {
                     startNamedRange: cleanedStartNamedRange,
@@ -149,7 +146,12 @@ export class GoogleSheetsExportService {
 
             // Log the result details
             logger.info(`Spreadsheet ID: ${spreadsheetId}`);
-            logger.info(`Sheet Name: ${sheetName}`);
+            const displaySheetName = uploadResult.sheetName
+                ?? (typeof sheetIdentifier === 'string' ? sheetIdentifier : undefined)
+                ?? (typeof sheetIdentifier === 'number' ? sheetIdentifier.toString() : '');
+            if (displaySheetName) {
+                logger.info(`Sheet: ${displaySheetName}`);
+            }
             logger.info(`Range: ${uploadResult.range}`);
 
             // Show a success message to the user with a link to the sheet
@@ -157,7 +159,8 @@ export class GoogleSheetsExportService {
             const cellRange = rangeParts.length > 1 ? rangeParts[1] : '';
             const sheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${uploadResult.sheetId}&range=${cellRange}`;
             const openSheetButton = 'Open Sheet';
-            vscode.window.showInformationMessage(`Successfully exported query results to Google Sheet: ${sheetName}`, openSheetButton)
+            const successName = displaySheetName || (typeof sheetIdentifier === 'number' ? `Sheet ID ${sheetIdentifier}` : 'the target sheet');
+            vscode.window.showInformationMessage(`Successfully exported query results to Google Sheet: ${successName}`, openSheetButton)
                 .then(selection => {
                     if (selection === openSheetButton) {
                         vscode.env.openExternal(vscode.Uri.parse(sheetUrl));
@@ -222,13 +225,17 @@ export function registerExportQueryToSheetCommand(context: vscode.ExtensionConte
             }
 
             // Prompt for sheet name
-            const sheetName = await vscode.window.showInputBox({
-                prompt: 'Enter the sheet name or ID',
+            const sheetNameInput = await vscode.window.showInputBox({
+                prompt: 'Enter the sheet identifier (ID or "ID | Name")',
                 placeHolder: 'Sheet1'
             });
-            if (!sheetName) {
+            if (!sheetNameInput) {
                 return; // User cancelled
             }
+
+            const parsedSheetIdentifier = SqlSheetConfiguration.parseSheetNameParameter(sheetNameInput);
+            const resolvedSheetId = parsedSheetIdentifier.sheetId;
+            const resolvedSheetName = parsedSheetIdentifier.sheetName ?? (resolvedSheetId === undefined ? sheetNameInput : undefined);
 
             // Prompt for start location
             const startLocationInput = await vscode.window.showInputBox({
@@ -275,7 +282,8 @@ export function registerExportQueryToSheetCommand(context: vscode.ExtensionConte
             // Create a configuration object
             const config = new SqlSheetConfiguration(
                 spreadsheetId,
-                sheetName,
+                resolvedSheetName,
+                resolvedSheetId,
                 resolvedStartCell,
                 resolvedStartNamedRange,
                 tableTitle,

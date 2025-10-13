@@ -2,7 +2,7 @@ export class SqlSheetConfiguration {
     // Static property to store parameter descriptions
     public static readonly parameterDescriptions: Record<string, string> = {
         spreadsheet_id: "The Google Sheet ID where results will be sent",
-        sheet_name: "The name or index of the sheet within the spreadsheet",
+        sheet_name: "Sheet identifier. Use \"SheetID | SheetName\" (e.g., \"315704920 | Summary\") or provide just the name or ID.",
         start_cell: "The cell where output should begin (e.g., \"A1\"). Optionally prefix with a named range like \"MyRange | A1\" to combine both.",
         start_named_range: "Legacy alternative to start_cell for named ranges. Prefer combining with start_cell as 'MyRange | A1'.",
         transpose: "Set to \"true\"/\"1\"/\"yes\" to transpose the output data (rows become columns)",
@@ -43,6 +43,7 @@ export class SqlSheetConfiguration {
     constructor(
         public readonly spreadsheet_id?: string,
         public readonly sheet_name?: string,
+        public readonly sheet_id?: number,
         public readonly start_cell?: string,
         public readonly start_named_range?: string,
         public readonly name?: string,
@@ -60,6 +61,15 @@ export class SqlSheetConfiguration {
         const hasCell = typeof this.start_cell === 'string' && this.start_cell.trim().length > 0;
         const hasNamedRange = typeof this.start_named_range === 'string' && this.start_named_range.trim().length > 0;
         return hasCell || hasNamedRange;
+    }
+
+    /**
+     * Determine whether this configuration contains a valid sheet identifier
+     */
+    public hasSheetIdentifier(): boolean {
+        const hasSheetName = typeof this.sheet_name === 'string' && this.sheet_name.trim().length > 0;
+        const hasSheetId = typeof this.sheet_id === 'number' && !Number.isNaN(this.sheet_id);
+        return hasSheetName || hasSheetId;
     }
 
     /**
@@ -131,5 +141,59 @@ export class SqlSheetConfiguration {
         }
 
         return trimmedCell;
+    }
+
+    /**
+     * Parse the sheet_name parameter into optional numeric sheet ID and name components.
+     */
+    public static parseSheetNameParameter(value?: string): { sheetId?: number; sheetName?: string } {
+        if (!value) {
+            return {};
+        }
+
+        const trimmedValue = value.trim();
+        if (trimmedValue.length === 0) {
+            return {};
+        }
+
+        const separatorIndex = trimmedValue.indexOf('|');
+        if (separatorIndex === -1) {
+            if (/^\d+$/.test(trimmedValue)) {
+                return { sheetId: Number(trimmedValue) };
+            }
+            return { sheetName: trimmedValue };
+        }
+
+        const idPart = trimmedValue.substring(0, separatorIndex).trim();
+        const namePart = trimmedValue.substring(separatorIndex + 1).trim();
+        const result: { sheetId?: number; sheetName?: string } = {};
+
+        if (idPart.length > 0 && /^\d+$/.test(idPart)) {
+            result.sheetId = Number(idPart);
+        }
+
+        if (namePart.length > 0) {
+            result.sheetName = namePart;
+        }
+
+        return result;
+    }
+
+    /**
+     * Format the sheet identifier parameter using optional sheet ID and name components.
+     */
+    public static formatSheetNameParameter(sheetId?: number, sheetName?: string): string {
+        const idText = typeof sheetId === 'number' && !Number.isNaN(sheetId) ? sheetId.toString() : '';
+        const nameText = typeof sheetName === 'string' ? sheetName.trim() : '';
+
+        if (idText && nameText) {
+            return `${idText} | ${nameText}`;
+        }
+
+        if (idText) {
+            return idText;
+        }
+
+        return nameText;
     }
 }

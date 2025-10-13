@@ -68,7 +68,7 @@ The SQL Parameters view should automatically appear in your Activity Bar after i
 The following parameters are supported:
 
 - `spreadsheet_id`: The Google Sheet ID where results will be sent
-- `sheet_name`: The name or index of the sheet within the spreadsheet
+- `sheet_name`: The sheet identifier. Supply an ID, a name, or combine both as `315704920 | Summary` to keep them in sync automatically.
 - `start_cell`: The cell where output should begin (e.g., "A1"). You can also combine a named range by writing `MyNamedRange | A1`, or provide just the named range name to anchor the export dynamically. When a named range is supplied, the extension keeps the range anchored to the first cell and will create or update the named range automatically after each export.
 - `start_named_range`: (Legacy) Alternative to `start_cell` for referencing a named range. Prefer the combined `start_cell` syntax above.
 - `transpose`: Set to "true" to transpose the output data

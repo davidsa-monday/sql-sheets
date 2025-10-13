@@ -95,6 +95,10 @@ export class SqlFile {
                 queryText = block.substring(firstSelect);
             }
 
+            const combinedSheetParameter = SqlSheetConfiguration.parseSheetNameParameter(params['sheet_name']);
+            const sheetId = combinedSheetParameter.sheetId;
+            const sheetName = combinedSheetParameter.sheetName ?? (sheetId === undefined ? params['sheet_name'] : undefined);
+
             const combinedStartParameter = SqlSheetConfiguration.parseStartCellParameter(params['start_cell']);
             const startNamedRange = combinedStartParameter.startNamedRange ?? params['start_named_range'];
             const startCell = combinedStartParameter.startCell ?? (!startNamedRange ? params['start_cell'] : undefined);
@@ -104,7 +108,8 @@ export class SqlFile {
             // and the constructor will use the default value (false)
             const config = new SqlSheetConfiguration(
                 params['spreadsheet_id'],
-                params['sheet_name'],
+                sheetName,
+                sheetId,
                 startCell,
                 startNamedRange,
                 params['name'],
