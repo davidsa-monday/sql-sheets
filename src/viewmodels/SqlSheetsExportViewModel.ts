@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { getGoogleSheetsExportService } from '../services/googleSheetsExportService';
+import { getSnowflakeService } from '../services/snowflakeService';
 import { SqlQuery } from '../models/SqlQuery';
 import { SqlSheetConfiguration } from '../models/SqlSheetConfiguration';
 
@@ -21,6 +22,20 @@ export class SqlSheetsExportViewModel {
 
             if (sqlQuery.config.skip) {
                 console.log('Skipping query export because the configuration is marked to skip.');
+                return;
+            }
+
+            const hasRequiredConfig = this._hasRequiredConfig(sqlQuery.config);
+            const isCreateStatement = this._isCreateStatement(sqlQuery.queryText);
+
+            if (!hasRequiredConfig) {
+                if (isCreateStatement) {
+                    await this._executeCreateStatement(sqlQuery.queryText);
+                } else {
+                    vscode.window.showInformationMessage(
+                        'Skipping query export because spreadsheet_id, sheet_name, and start_cell are required.'
+                    );
+                }
                 return;
             }
 
@@ -99,6 +114,48 @@ export class SqlSheetsExportViewModel {
             data_only,
             config.skip
         );
+    }
+
+    private _hasRequiredConfig(config: SqlSheetConfiguration): boolean {
+        const hasSpreadsheetId = typeof config.spreadsheet_id === 'string' && config.spreadsheet_id.trim().length > 0;
+        const hasSheetName = typeof config.sheet_name === 'string' && config.sheet_name.trim().length > 0;
+        const hasStartCell = typeof config.start_cell === 'string' && config.start_cell.trim().length > 0;
+
+        return hasSpreadsheetId && hasSheetName && hasStartCell;
+    }
+
+    private _isCreateStatement(queryText: string): boolean {
+        const strippedQuery = queryText
+            .replace(/\/\*[\s\S]*?\*\//g, '') // Remove block comments
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0 && !line.startsWith('--'))
+            .join(' ');
+
+        return /^create\b/i.test(strippedQuery);
+    }
+
+    private async _executeCreateStatement(queryText: string): Promise<void> {
+        const snowflakeService = getSnowflakeService();
+
+        if (!snowflakeService.isConfigured()) {
+            vscode.window.showErrorMessage('Snowflake connection is not configured yet.');
+            return;
+        }
+
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Executing CREATE statement in Snowflake...',
+            cancellable: false
+        }, async () => {
+            try {
+                await snowflakeService.executeQuery(queryText);
+                vscode.window.showInformationMessage('CREATE statement executed successfully.');
+            } catch (err) {
+                vscode.window.showErrorMessage(`Failed to execute CREATE statement: ${err instanceof Error ? err.message : String(err)}`);
+                console.error(err);
+            }
+        });
     }
 }
 
