@@ -133,7 +133,8 @@ export class GoogleSheetsExportService {
                     transpose: transpose,
                     tableTitle: tableTitle,
                     dataOnly: dataOnly,
-                    sqlQuery: sqlQuery
+                    sqlQuery: sqlQuery,
+                    tableName: config.table_name
                 }
             );
             outputChannel.appendLine('Data uploaded successfully.');

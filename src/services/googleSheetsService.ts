@@ -6,6 +6,47 @@ import { JWT } from 'google-auth-library';
 // Create a dedicated output channel for SQL Sheets logs
 const outputChannel = vscode.window.createOutputChannel('SQL Sheets');
 
+type SheetWithTables = sheets_v4.Schema$Sheet & { tables?: SheetsApiTable[] };
+
+type SheetsApiTable = {
+    tableId?: string | null;
+    name?: string | null;
+    range?: sheets_v4.Schema$GridRange;
+    columnProperties?: SheetsApiTableColumn[];
+};
+
+type SheetsApiTableColumn = {
+    columnIndex?: number | null;
+    columnName?: string | null;
+    columnType?: string | null;
+};
+
+type SheetsTableSnapshot = {
+    tableId?: string;
+    name?: string;
+};
+
+interface SheetsTableRequest extends sheets_v4.Schema$Request {
+    addTable?: {
+        table: SheetsTableSpec;
+    };
+    updateTable?: {
+        table: SheetsTableSpec & { tableId: string };
+        fields: string;
+    };
+}
+
+type SheetsTableSpec = {
+    name?: string;
+    range: sheets_v4.Schema$GridRange;
+    columnProperties: SheetsTableColumnSpec[];
+};
+
+type SheetsTableColumnSpec = {
+    columnIndex: number;
+    columnName: string;
+};
+
 export interface SheetUploadResult {
     range: string;
     sheetId?: number;
@@ -119,11 +160,13 @@ export class GoogleSheetsService {
             dataOnly?: boolean,
             sqlQuery?: string,
             queryForNote?: string,
-            autoCreateSheet?: boolean
+            autoCreateSheet?: boolean,
+            tableName?: string
         } = {}
     ): Promise<SheetUploadResult> {
         // Default to auto-creating sheets if not specified
         const autoCreateSheet = options.autoCreateSheet ?? true;
+        const tableName = typeof options.tableName === 'string' ? options.tableName.trim() : '';
 
         try {
             // Show progress indicator
@@ -139,6 +182,7 @@ export class GoogleSheetsService {
                 const { column, row } = this.parseCellReference(startCell);
 
                 let targetSheetId: number | undefined;
+                let knownTables: SheetsTableSnapshot[] | undefined;
 
                 // Validate sheet name
                 if (typeof sheetName === 'string' && sheetName.trim() === '') {
@@ -167,14 +211,16 @@ export class GoogleSheetsService {
                     outputChannel.appendLine(`Verifying spreadsheet and sheet "${sheetName}"...`);
                     const spreadsheetInfo = await sheets.spreadsheets.get({
                         spreadsheetId,
-                        includeGridData: false
+                        includeGridData: false,
+                        fields: 'sheets.properties,sheets.tables'
                     });
 
                     const availableSheets = spreadsheetInfo.data.sheets ?? [];
+                    const typedSheets = availableSheets as SheetWithTables[];
 
-                    if (availableSheets.length > 0) {
+                    if (typedSheets.length > 0) {
                         outputChannel.appendLine('Available sheets in this spreadsheet:');
-                        availableSheets.forEach(sheet => {
+                        typedSheets.forEach(sheet => {
                             const sheetId = sheet.properties?.sheetId;
                             const sheetTitle = sheet.properties?.title;
                             outputChannel.appendLine(`- ${sheetTitle} (ID: ${sheetId})`);
@@ -182,7 +228,7 @@ export class GoogleSheetsService {
                     }
 
                     const requestedSheetId = typeof sheetName === 'number' ? sheetName : undefined;
-                    const matchedSheet = availableSheets.find(sheet => {
+                    const matchedSheet = typedSheets.find(sheet => {
                         const props = sheet.properties;
                         if (!props) {
                             return false;
@@ -197,6 +243,15 @@ export class GoogleSheetsService {
                     const matchedSheetId = matchedSheet?.properties?.sheetId;
                     if (sheetExists && typeof matchedSheetId === 'number') {
                         targetSheetId = matchedSheetId;
+                        const tables = matchedSheet?.tables ?? [];
+                        if (Array.isArray(tables) && tables.length > 0) {
+                            knownTables = tables
+                                .filter(table => Boolean(table?.name) || Boolean(table?.tableId))
+                                .map(table => ({
+                                    tableId: typeof table?.tableId === 'string' ? table.tableId : undefined,
+                                    name: typeof table?.name === 'string' ? table.name : undefined
+                                }));
+                        }
                     }
 
                     if (!sheetExists && typeof sheetName === 'string' && autoCreateSheet) {
@@ -226,6 +281,7 @@ export class GoogleSheetsService {
                             if (typeof newSheetId === 'number') {
                                 targetSheetId = newSheetId;
                             }
+                            knownTables = [];
                         } catch (err) {
                             outputChannel.appendLine(`Failed to create sheet "${sheetName}": ${err instanceof Error ? err.message : String(err)}`);
                         }
@@ -436,6 +492,31 @@ export class GoogleSheetsService {
                             queryNote: options.queryForNote ?? options.sqlQuery
                         }
                     );
+                }
+
+                if (tableName) {
+                    try {
+                        progress.report({ message: `Configuring table "${tableName}"...` });
+                        await this.convertRangeToSheetTable(
+                            sheets,
+                            spreadsheetId,
+                            sheetName.toString(),
+                            column,
+                            row,
+                            processedData,
+                            {
+                                sheetIdOverride: targetSheetId,
+                                hasTitleRow,
+                                dataOnly: Boolean(options.dataOnly),
+                                transpose: shouldTranspose,
+                                tableName,
+                                existingTables: knownTables
+                            }
+                        );
+                    } catch (err) {
+                        const message = err instanceof Error ? err.message : String(err);
+                        outputChannel.appendLine(`Warning: Failed to configure table "${tableName}": ${message}`);
+                    }
                 }
 
                 outputChannel.appendLine(
@@ -674,6 +755,184 @@ export class GoogleSheetsService {
         }
 
         return result;
+    }
+
+    private async convertRangeToSheetTable(
+        sheets: sheets_v4.Sheets,
+        spreadsheetId: string,
+        sheetName: string,
+        column: string,
+        row: number,
+        data: any[][],
+        options: {
+            sheetIdOverride?: number;
+            hasTitleRow: boolean;
+            dataOnly: boolean;
+            transpose: boolean;
+            tableName: string;
+            existingTables?: SheetsTableSnapshot[];
+        }
+    ): Promise<void> {
+        const trimmedTableName = options.tableName.trim();
+        if (!trimmedTableName) {
+            return;
+        }
+
+        if (options.transpose) {
+            outputChannel.appendLine(`convertRangeToSheetTable: Skipping table creation for "${trimmedTableName}" because data is transposed.`);
+            return;
+        }
+
+        if (options.dataOnly) {
+            outputChannel.appendLine(`convertRangeToSheetTable: Skipping table creation for "${trimmedTableName}" because data_only is true.`);
+            return;
+        }
+
+        const dataStartIndex = options.hasTitleRow ? 1 : 0;
+        if (data.length <= dataStartIndex) {
+            outputChannel.appendLine(`convertRangeToSheetTable: Unable to locate a header row for table "${trimmedTableName}".`);
+            return;
+        }
+
+        const tableRows = data.length - dataStartIndex;
+        if (tableRows <= 0) {
+            outputChannel.appendLine(`convertRangeToSheetTable: No data rows detected for table "${trimmedTableName}".`);
+            return;
+        }
+
+        const tableWidth = data.slice(dataStartIndex).reduce((max, rowValues) => {
+            const width = Array.isArray(rowValues) ? rowValues.length : 0;
+            return Math.max(max, width);
+        }, 0);
+
+        if (tableWidth === 0) {
+            outputChannel.appendLine(`convertRangeToSheetTable: No columns detected for table "${trimmedTableName}".`);
+            return;
+        }
+
+        const sheetId = options.sheetIdOverride ?? await this.getSheetId(sheets, spreadsheetId, sheetName);
+
+        const startRowIndex = (row - 1) + dataStartIndex;
+        const endRowIndex = startRowIndex + tableRows;
+        const startColumnIndex = this.columnToIndex(column);
+        const endColumnIndex = startColumnIndex + tableWidth;
+
+        const gridRange: sheets_v4.Schema$GridRange = {
+            sheetId,
+            startRowIndex,
+            endRowIndex,
+            startColumnIndex,
+            endColumnIndex
+        };
+
+        const escapedSheetName = this.escapeSheetName(sheetName);
+        const headerRowNumber = row + dataStartIndex;
+        const lastRowNumber = headerRowNumber + tableRows - 1;
+        const endColumnLetter = this.incrementColumn(column, tableWidth - 1);
+        const readableRange = `${escapedSheetName}!${column}${headerRowNumber}:${endColumnLetter}${lastRowNumber}`;
+
+        const headerRow = Array.isArray(data[dataStartIndex]) ? data[dataStartIndex] : [];
+        const dataRows = data.slice(dataStartIndex + 1);
+        const columnProperties = this.buildTableColumnProperties(headerRow, dataRows, tableWidth);
+
+        const tableSpec: SheetsTableSpec = {
+            name: trimmedTableName,
+            range: gridRange,
+            columnProperties
+        };
+
+        const existingTable = options.existingTables?.find(table => {
+            const existingName = table?.name?.trim();
+            return existingName ? existingName.toLowerCase() === trimmedTableName.toLowerCase() : false;
+        });
+
+        const requests: SheetsTableRequest[] = [];
+
+        if (existingTable?.tableId) {
+            outputChannel.appendLine(`convertRangeToSheetTable: Updating existing table "${trimmedTableName}" (ID: ${existingTable.tableId}) to range ${readableRange}.`);
+            requests.push({
+                updateTable: {
+                    table: {
+                        ...tableSpec,
+                        tableId: existingTable.tableId
+                    },
+                    fields: 'name,range,columnProperties'
+                }
+            });
+        } else {
+            outputChannel.appendLine(`convertRangeToSheetTable: Adding table "${trimmedTableName}" at range ${readableRange}.`);
+            requests.push({
+                addTable: {
+                    table: tableSpec
+                }
+            });
+        }
+
+        if (requests.length === 0) {
+            outputChannel.appendLine(`convertRangeToSheetTable: No table requests prepared for "${trimmedTableName}".`);
+            return;
+        }
+
+        await sheets.spreadsheets.batchUpdate({
+            spreadsheetId,
+            requestBody: {
+                requests: requests as sheets_v4.Schema$Request[]
+            }
+        });
+
+        outputChannel.appendLine(`convertRangeToSheetTable: Table "${trimmedTableName}" configured successfully.`);
+    }
+
+    private buildTableColumnProperties(
+        headerRow: any[],
+        dataRows: any[][],
+        columnCount: number
+    ): SheetsTableColumnSpec[] {
+        const normalizedHeader = Array.isArray(headerRow) ? headerRow : [];
+        const usedNames = new Map<string, number>();
+        const columns: SheetsTableColumnSpec[] = [];
+
+        for (let index = 0; index < columnCount; index++) {
+            const headerValue = normalizedHeader[index];
+            const columnName = this.generateUniqueColumnName(headerValue, index, usedNames);
+            columns.push({
+                columnIndex: index,
+                columnName
+            });
+        }
+
+        return columns;
+    }
+
+    private generateUniqueColumnName(
+        value: any,
+        index: number,
+        tracker: Map<string, number>
+    ): string {
+        const fallbackName = `Column ${index + 1}`;
+        let baseName: string;
+
+        if (typeof value === 'string') {
+            baseName = value.trim();
+        } else if (value !== null && value !== undefined) {
+            baseName = String(value).trim();
+        } else {
+            baseName = '';
+        }
+
+        if (baseName.length === 0) {
+            baseName = fallbackName;
+        }
+
+        const key = baseName.toLowerCase();
+        const occurrence = tracker.get(key) ?? 0;
+        tracker.set(key, occurrence + 1);
+
+        if (occurrence === 0) {
+            return baseName;
+        }
+
+        return `${baseName} (${occurrence + 1})`;
     }
 
     /**
