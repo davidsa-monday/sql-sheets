@@ -149,6 +149,8 @@ export class GoogleSheetsExportService {
                     outputChannel.show(true);
                 }
 
+                const queryForNote = this.extractQueryForNote(sqlQuery);
+
                 const uploadResult = await googleService.uploadDataToSheet(
                     processedResults,
                     spreadsheetId,
@@ -159,6 +161,7 @@ export class GoogleSheetsExportService {
                         tableTitle,
                         dataOnly,
                         sqlQuery,
+                        queryForNote,
                         autoCreateSheet: true // Explicitly enable sheet auto-creation
                     }
                 );
@@ -218,6 +221,21 @@ export class GoogleSheetsExportService {
         }
 
         return hashParts.length > 0 ? `${baseUrl}#${hashParts.join('&')}` : baseUrl;
+    }
+
+    private extractQueryForNote(sql: string | undefined): string | undefined {
+        if (!sql) {
+            return undefined;
+        }
+
+        const lines = sql.split(/\r?\n/);
+        const filtered = lines.filter(line => {
+            const trimmed = line.trim();
+            return trimmed.length === 0 || !/^--\s*[A-Za-z_][\w-]*\s*:/i.test(trimmed);
+        });
+
+        const result = filtered.join('\n').trim();
+        return result.length > 0 ? result : undefined;
     }
 
     /**

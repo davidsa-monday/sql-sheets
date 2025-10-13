@@ -118,6 +118,7 @@ export class GoogleSheetsService {
             tableTitle?: string,
             dataOnly?: boolean,
             sqlQuery?: string,
+            queryForNote?: string,
             autoCreateSheet?: boolean
         } = {}
     ): Promise<SheetUploadResult> {
@@ -238,19 +239,38 @@ export class GoogleSheetsService {
                 }
                 outputChannel.show(true);
 
+                const rawTableTitle = typeof options.tableTitle === 'string' ? options.tableTitle : '';
+                const titleText = rawTableTitle.trim();
+                const hasTitleRow = titleText.length > 0;
+                const shouldTranspose = Boolean(options.transpose);
+                const executedAt = new Date();
+                const executedAtDisplay = executedAt.toLocaleString();
+                let titleTimestampColumnIndex: number | undefined;
+
                 // Process the data
                 let processedData = [...data];  // Create a copy to avoid modifying the original
+                const minimumTitleWidth = 2;
 
                 // Add table title if specified
-                if (options.tableTitle) {
+                if (hasTitleRow) {
                     // Create a title row that spans the width of the data
-                    const titleWidth = processedData.length > 0 ? processedData[0].length : 1;
-                    const titleRow = [options.tableTitle];
+                    let titleWidth = processedData.length > 0 ? processedData[0].length : 1;
 
-                    // Fill the rest of the title row with empty cells to match data width
-                    for (let i = 1; i < titleWidth; i++) {
-                        titleRow.push('');
+                    if (titleWidth < minimumTitleWidth) {
+                        processedData = processedData.map(row => {
+                            const rowValues = Array.isArray(row) ? [...row] : [row];
+                            while (rowValues.length < minimumTitleWidth) {
+                                rowValues.push('');
+                            }
+                            return rowValues;
+                        });
+                        titleWidth = minimumTitleWidth;
                     }
+
+                    const titleRow = Array(titleWidth).fill('');
+                    titleRow[0] = titleText;
+                    titleTimestampColumnIndex = titleWidth - 1;
+                    titleRow[titleTimestampColumnIndex] = executedAtDisplay;
 
                     outputChannel.appendLine(`Adding title row: ${JSON.stringify(titleRow)}`);
                     // Add title row without the empty row gap
@@ -258,7 +278,7 @@ export class GoogleSheetsService {
                 }
 
                 // Transpose the data if requested
-                if (options.transpose) {
+                if (shouldTranspose) {
                     processedData = this.transposeData(processedData);
                     outputChannel.appendLine(`Data transposed: now ${processedData.length} rows x ${processedData[0]?.length || 0} columns`);
                 }
@@ -409,7 +429,12 @@ export class GoogleSheetsService {
                         column,
                         row,
                         processedData,
-                        targetSheetId
+                        targetSheetId,
+                        hasTitleRow,
+                        {
+                            timestampColumnIndex: !shouldTranspose ? titleTimestampColumnIndex : undefined,
+                            queryNote: options.queryForNote ?? options.sqlQuery
+                        }
                     );
                 }
 
@@ -666,87 +691,127 @@ export class GoogleSheetsService {
         column: string,
         row: number,
         data: any[][],
-        sheetIdOverride?: number
+        sheetIdOverride?: number,
+        hasTitleRow: boolean = false,
+        titleDetails: {
+            timestampColumnIndex?: number;
+            queryNote?: string | undefined;
+        } = {}
     ): Promise<void> {
-        if (data.length === 0 || data[0].length === 0) {
+        if (data.length === 0) {
+            outputChannel.appendLine('applyFormatting: no data supplied, skipping.');
             return;
         }
 
-        const sheetId = sheetIdOverride ?? await this.getSheetId(sheets, spreadsheetId, sheetName);
+        const totalRows = data.length;
+        const dataStartIndex = hasTitleRow ? 1 : 0;
+        if (totalRows <= dataStartIndex) {
+            outputChannel.appendLine('applyFormatting: unable to locate header row, skipping.');
+            return;
+        }
 
-        // Calculate the header range
+        const columnCount = data.reduce((max, rowVals) => {
+            const length = rowVals ? rowVals.length : 0;
+            return Math.max(max, length);
+        }, 0);
+
+        if (columnCount === 0) {
+            outputChannel.appendLine('applyFormatting: no columns detected, skipping.');
+            return;
+        }
+
+        const startColumnIndex = this.columnToIndex(column);
+        const endColumnIndex = startColumnIndex + columnCount;
+        const sheetId = sheetIdOverride ?? await this.getSheetId(sheets, spreadsheetId, sheetName);
+        const firstRowIndex = row - 1;
+        const headerRowIndex = firstRowIndex + dataStartIndex;
+
+        const titleRange = hasTitleRow ? {
+            sheetId,
+            startRowIndex: firstRowIndex,
+            endRowIndex: firstRowIndex + 1,
+            startColumnIndex: startColumnIndex,
+            endColumnIndex
+        } : undefined;
+
         const headerRange = {
-            sheetId: sheetId,
-            startRowIndex: row - 1,
-            endRowIndex: row,
-            startColumnIndex: this.columnToIndex(column),
-            endColumnIndex: this.columnToIndex(column) + data[0].length
+            sheetId,
+            startRowIndex: headerRowIndex,
+            endRowIndex: headerRowIndex + 1,
+            startColumnIndex: startColumnIndex,
+            endColumnIndex
         };
 
-        // Calculate the title row range if row > 1 (meaning we have a title in row 1)
-        const titleRange = row > 1 ? {
-            sheetId: sheetId,
-            startRowIndex: row - 2,
-            endRowIndex: row - 1,
-            startColumnIndex: this.columnToIndex(column),
-            endColumnIndex: this.columnToIndex(column) + data[0].length
-        } : null;
+        const borderRange = {
+            sheetId,
+            startRowIndex: firstRowIndex,
+            endRowIndex: firstRowIndex + totalRows,
+            startColumnIndex: startColumnIndex,
+            endColumnIndex
+        };
 
-        // Build the requests array
         const requests = [];
 
-        // Format header row
+        if (titleRange) {
+            requests.push({
+                repeatCell: {
+                    range: titleRange,
+                    cell: {
+                        userEnteredFormat: {
+                            backgroundColor: { red: 0, green: 0, blue: 0 },
+                            textFormat: {
+                                foregroundColor: { red: 1, green: 1, blue: 1 },
+                                bold: true
+                            },
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)'
+                }
+            });
+        }
+
         requests.push({
             repeatCell: {
                 range: headerRange,
                 cell: {
                     userEnteredFormat: {
-                        backgroundColor: { red: 0, green: 0, blue: 0 },
                         textFormat: {
-                            foregroundColor: { red: 1.0, green: 1.0, blue: 1.0 },
                             bold: true
                         },
                         horizontalAlignment: 'LEFT'
                     }
                 },
-                fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)'
+                fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
             }
         });
 
-        // Add borders
+        const borderColor = { red: 0, green: 0, blue: 0 };
         requests.push({
             updateBorders: {
-                range: {
-                    sheetId: headerRange.sheetId,
-                    startRowIndex: row - 1,
-                    endRowIndex: row + data.length - 1,
-                    startColumnIndex: this.columnToIndex(column),
-                    endColumnIndex: this.columnToIndex(column) + data[0].length
-                },
-                top: { style: 'SOLID', width: 2 },
-                bottom: { style: 'SOLID', width: 1 },
-                left: { style: 'SOLID', width: 2 },
-                right: { style: 'SOLID', width: 2 }
+                range: borderRange,
+                top: { style: 'SOLID', width: 1, color: borderColor },
+                bottom: { style: 'SOLID', width: 1, color: borderColor },
+                left: { style: 'SOLID', width: 1, color: borderColor },
+                right: { style: 'SOLID', width: 1, color: borderColor }
             }
         });
 
-        // Auto-resize columns
         requests.push({
             autoResizeDimensions: {
                 dimensions: {
-                    sheetId: headerRange.sheetId,
+                    sheetId,
                     dimension: 'COLUMNS',
-                    startIndex: this.columnToIndex(column),
-                    endIndex: this.columnToIndex(column) + data[0].length
+                    startIndex: startColumnIndex,
+                    endIndex: endColumnIndex
                 }
             }
         });
 
-        // Hide gridlines on the sheet
         requests.push({
             updateSheetProperties: {
                 properties: {
-                    sheetId: headerRange.sheetId,
+                    sheetId,
                     gridProperties: {
                         hideGridlines: true
                     }
@@ -755,36 +820,57 @@ export class GoogleSheetsService {
             }
         });
 
-        // Format title row if present (when row > 1)
-        if (row > 1 && titleRange) {
+        const timestampRelativeIndex = typeof titleDetails.timestampColumnIndex === 'number'
+            ? titleDetails.timestampColumnIndex
+            : undefined;
+
+        let timestampRange;
+        if (titleRange && typeof timestampRelativeIndex === 'number') {
+            const timestampColumnIndex = startColumnIndex + timestampRelativeIndex;
+            timestampRange = {
+                sheetId,
+                startRowIndex: firstRowIndex,
+                endRowIndex: firstRowIndex + 1,
+                startColumnIndex: timestampColumnIndex,
+                endColumnIndex: timestampColumnIndex + 1
+            };
+
             requests.push({
                 repeatCell: {
-                    range: titleRange,
+                    range: timestampRange,
                     cell: {
                         userEnteredFormat: {
+                            backgroundColor: { red: 0, green: 0, blue: 0 },
                             textFormat: {
-                                bold: true,
-                                fontSize: 12
+                                fontSize: 8,
+                                foregroundColor: { red: 0.6, green: 0.6, blue: 0.6 },
+                                bold: false
                             },
-                            horizontalAlignment: 'LEFT', // Left-align the title row
-                            borders: {
-                                top: { style: 'SOLID', width: 1 },
-                                bottom: { style: 'SOLID', width: 1 },
-                                left: { style: 'SOLID', width: 1 },
-                                right: { style: 'SOLID', width: 1 }
-                            }
+                            horizontalAlignment: 'RIGHT'
                         }
                     },
-                    fields: 'userEnteredFormat(textFormat,horizontalAlignment,borders)'
+                    fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)'
                 }
             });
         }
 
-        // Apply all formatting
+        const queryNote = titleDetails.queryNote?.trim();
+        if (titleRange && queryNote && timestampRange) {
+            requests.push({
+                repeatCell: {
+                    range: timestampRange,
+                    cell: {
+                        note: queryNote
+                    },
+                    fields: 'note'
+                }
+            });
+        }
+
         await sheets.spreadsheets.batchUpdate({
             spreadsheetId,
             requestBody: {
-                requests: requests
+                requests
             }
         });
     }
