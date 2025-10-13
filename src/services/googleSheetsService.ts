@@ -50,6 +50,12 @@ type SheetsTableColumnSpec = {
 export interface SheetUploadResult {
     range: string;
     sheetId?: number;
+    startCell: string;
+    startColumn: string;
+    startRow: number;
+    startNamedRange?: string;
+    namedRangeCreated?: boolean;
+    namedRangeUpdated?: boolean;
 }
 
 /**
@@ -153,7 +159,7 @@ export class GoogleSheetsService {
         data: any[][],
         spreadsheetId: string,
         sheetName: string | number,
-        startCell: string,
+        startCell?: string,
         options: {
             transpose?: boolean,
             tableTitle?: string,
@@ -161,7 +167,8 @@ export class GoogleSheetsService {
             sqlQuery?: string,
             queryForNote?: string,
             autoCreateSheet?: boolean,
-            tableName?: string
+            tableName?: string,
+            startNamedRange?: string
         } = {}
     ): Promise<SheetUploadResult> {
         // Default to auto-creating sheets if not specified
@@ -178,19 +185,25 @@ export class GoogleSheetsService {
                 // Ensure we have valid credentials
                 const credentials = this.loadServiceAccountCredentials();
 
-                // Parse the start cell to get row and column indexes
-                const { column, row } = this.parseCellReference(startCell);
+                const startNamedRange = typeof options.startNamedRange === 'string'
+                    ? options.startNamedRange.trim()
+                    : '';
 
                 let targetSheetId: number | undefined;
                 let knownTables: SheetsTableSnapshot[] | undefined;
+                let matchedNamedRange: sheets_v4.Schema$NamedRange | undefined;
+                let namedRangeNeedsCreation = false;
+                let resolvedSheetName: string | undefined = typeof sheetName === 'string'
+                    ? sheetName
+                    : undefined;
 
-                // Validate sheet name
+                // Validate sheet name input
                 if (typeof sheetName === 'string' && sheetName.trim() === '') {
                     throw new Error('Sheet name cannot be empty');
                 }
 
-                // Log the parameters for debugging
-                logger.info(`Preparing upload to sheet "${sheetName}" starting at ${column}${row}`, { audience: ['developer'] });
+                let column: string | undefined;
+                let row: number | undefined;
 
                 // Create a JWT client using the service account credentials
                 progress.report({ message: 'Authenticating...' });
@@ -212,11 +225,12 @@ export class GoogleSheetsService {
                     const spreadsheetInfo = await sheets.spreadsheets.get({
                         spreadsheetId,
                         includeGridData: false,
-                        fields: 'sheets.properties,sheets.tables'
+                        fields: 'sheets.properties,sheets.tables,namedRanges'
                     });
 
                     const availableSheets = spreadsheetInfo.data.sheets ?? [];
                     const typedSheets = availableSheets as SheetWithTables[];
+                    const namedRanges = spreadsheetInfo.data.namedRanges ?? [];
 
                     if (typedSheets.length > 0) {
                         logger.info('Available sheets in this spreadsheet:', { audience: ['developer'] });
@@ -228,6 +242,7 @@ export class GoogleSheetsService {
                     }
 
                     const requestedSheetId = typeof sheetName === 'number' ? sheetName : undefined;
+                    const requestedSheetName = typeof sheetName === 'string' ? sheetName : undefined;
                     const matchedSheet = typedSheets.find(sheet => {
                         const props = sheet.properties;
                         if (!props) {
@@ -236,13 +251,16 @@ export class GoogleSheetsService {
                         if (requestedSheetId !== undefined) {
                             return props.sheetId === requestedSheetId;
                         }
-                        return props.title === sheetName;
+                        return props.title === requestedSheetName;
                     });
 
                     let sheetExists = Boolean(matchedSheet);
                     const matchedSheetId = matchedSheet?.properties?.sheetId;
                     if (sheetExists && typeof matchedSheetId === 'number') {
                         targetSheetId = matchedSheetId;
+                        if (!resolvedSheetName && matchedSheet?.properties?.title) {
+                            resolvedSheetName = matchedSheet.properties.title;
+                        }
                         const tables = matchedSheet?.tables ?? [];
                         if (Array.isArray(tables) && tables.length > 0) {
                             knownTables = tables
@@ -260,11 +278,11 @@ export class GoogleSheetsService {
                             const addSheetResponse = await sheets.spreadsheets.batchUpdate({
                                 spreadsheetId,
                                 requestBody: {
-                                    requests: [
-                                        {
-                                            addSheet: {
-                                                properties: {
-                                                    title: sheetName,
+                                requests: [
+                                    {
+                                        addSheet: {
+                                            properties: {
+                                                title: sheetName,
                                                     gridProperties: {
                                                         hideGridlines: true
                                                     }
@@ -280,6 +298,7 @@ export class GoogleSheetsService {
                                 targetSheetId = newSheetId;
                                 sheetExists = true;
                                 knownTables = [];
+                                resolvedSheetName = typeof sheetName === 'string' ? sheetName : resolvedSheetName;
                                 logger.info(`Successfully created sheet "${sheetName}" with ID ${newSheetId}`, { audience: ['developer'] });
                             } else {
                                 logger.warn(`Created sheet "${sheetName}" but did not receive a valid sheet ID.`, { audience: ['developer'] });
@@ -292,10 +311,69 @@ export class GoogleSheetsService {
                     } else {
                         logger.info(`Sheet "${sheetName}" found in spreadsheet.`, { audience: ['developer'] });
                     }
+
+                    if (startNamedRange) {
+                        matchedNamedRange = namedRanges.find(range => range.name === startNamedRange);
+                        if (!matchedNamedRange || !matchedNamedRange.range) {
+                            if (startCell) {
+                                logger.warn(`Named range "${startNamedRange}" not found. Falling back to start cell.`, { audience: ['developer'] });
+                                namedRangeNeedsCreation = true;
+                            } else {
+                                throw new Error(`Named range "${startNamedRange}" was not found in the spreadsheet.`);
+                            }
+                        } else {
+                            const range = matchedNamedRange.range;
+                            const rangeSheetId = typeof range.sheetId === 'number' ? range.sheetId : targetSheetId;
+
+                            if (typeof rangeSheetId === 'number') {
+                                targetSheetId = rangeSheetId;
+                                const rangeSheet = typedSheets.find(sheet => sheet.properties?.sheetId === rangeSheetId);
+                                const rangeSheetTitle = rangeSheet?.properties?.title;
+                                if (rangeSheetTitle) {
+                                    resolvedSheetName = rangeSheetTitle;
+                                }
+                            }
+
+                            const startColumnIndex = typeof range.startColumnIndex === 'number' ? range.startColumnIndex : 0;
+                            const startRowIndex = typeof range.startRowIndex === 'number' ? range.startRowIndex : 0;
+
+                            column = this.indexToColumn(startColumnIndex);
+                            row = startRowIndex + 1;
+
+                            logger.info(`Named range "${startNamedRange}" resolved to ${column}${row}`, { audience: ['developer'] });
+                        }
+                    }
                 } catch (err) {
                     logger.error(`Error verifying spreadsheet/sheet: ${err instanceof Error ? err.message : String(err)}`);
                 }
                 logger.revealOutput();
+
+                if (!column || !row) {
+                    if (!startCell) {
+                        throw new Error('A start cell or named range is required.');
+                    }
+
+                    const parsedCell = this.parseCellReference(startCell);
+                    column = parsedCell.column;
+                    row = parsedCell.row;
+                }
+
+                if (column === undefined || row === undefined) {
+                    throw new Error('Failed to resolve start location for upload.');
+                }
+
+                const startColumn = column;
+                const startRow = row;
+                const resolvedStartCell = `${startColumn}${startRow}`;
+
+                const sheetLabelForLogs = resolvedSheetName ?? (typeof sheetName === 'string' ? sheetName : `ID ${sheetName}`);
+                logger.info(`Preparing upload to sheet "${sheetLabelForLogs}" starting at ${startColumn}${startRow}`, { audience: ['developer'] });
+                if (startNamedRange) {
+                    logger.info(`Using named range: "${startNamedRange}"`, { audience: ['developer'] });
+                }
+                if (startCell) {
+                    logger.info(`Start cell input: ${startCell}`, { audience: ['developer'] });
+                }
 
                 const rawTableTitle = typeof options.tableTitle === 'string' ? options.tableTitle : '';
                 const titleText = rawTableTitle.trim();
@@ -342,8 +420,10 @@ export class GoogleSheetsService {
                 }
 
                 // Calculate the range - handle sheet name differently based on type
-                let rangeSheetIdentifier;
-                if (typeof sheetName === 'number') {
+                let rangeSheetIdentifier: string;
+                if (resolvedSheetName) {
+                    rangeSheetIdentifier = resolvedSheetName;
+                } else if (typeof sheetName === 'number') {
                     // For numeric sheet IDs, just use the number as is
                     rangeSheetIdentifier = sheetName.toString();
                 } else {
@@ -360,8 +440,8 @@ export class GoogleSheetsService {
                 logger.info(`Data dimensions before range calculation: ${processedData.length} rows x max width ${dataMaxWidth}`, { audience: ['developer'] });
 
                 // Calculate the end cell coordinates based on data dimensions
-                const endRow = row + processedData.length - 1;
-                const endColumn = this.incrementColumn(column, dataMaxWidth - 1);
+                const endRow = startRow + processedData.length - 1;
+                const endColumn = this.incrementColumn(startColumn, dataMaxWidth - 1);
 
                 // Get sheet name prefix for range
                 let rangePrefix;
@@ -374,7 +454,7 @@ export class GoogleSheetsService {
                 }
 
                 // Build the range manually instead of using calculateRange
-                const range = `${rangePrefix}!${column}${row}:${endColumn}${endRow}`;
+                const range = `${rangePrefix}!${startColumn}${startRow}:${endColumn}${endRow}`;
                 logger.info(`Calculated range: ${range}`, { audience: ['developer'] });
 
                 // Upload the data
@@ -420,21 +500,22 @@ export class GoogleSheetsService {
                 // Clear existing content and formatting in the continuous range
                 try {
                     logger.info('Starting to clear continuous range...');
+                    const sheetIdentifierForLookup = resolvedSheetName ?? sheetName.toString();
                     const resolvedSheetId = typeof targetSheetId === 'number'
                         ? targetSheetId
-                        : await this.getSheetId(sheets, spreadsheetId, sheetName.toString());
+                        : await this.getSheetId(sheets, spreadsheetId, sheetIdentifierForLookup);
                     targetSheetId = resolvedSheetId;
-                    logger.info(`Got sheet ID: ${resolvedSheetId} for sheet: ${sheetName}`);
+                    logger.info(`Got sheet ID: ${resolvedSheetId} for sheet: ${sheetIdentifierForLookup}`);
 
                     // Log the parameters being passed to clearContinuousRange
-                    logger.info(`Clearing range starting at column: ${column}, row: ${row}, data size: ${processedData.length} x ${processedData[0]?.length || 0}`);
+                    logger.info(`Clearing range starting at column: ${startColumn}, row: ${startRow}, data size: ${processedData.length} x ${processedData[0]?.length || 0}`);
 
                     await this.clearContinuousRange(
                         sheets,
                         spreadsheetId,
                         resolvedSheetId,
-                        column,
-                        row,
+                        startColumn,
+                        startRow,
                         processedData
                     );
                     logger.info('Successfully cleared existing content and formatting in the target range', { audience: ['developer'] });
@@ -464,7 +545,7 @@ export class GoogleSheetsService {
                             if (errorMessage && errorMessage.includes("Unable to parse range")) {
                                 // Special handling for range parsing errors, which are often related to missing sheets
                                 throw new Error(
-                                    `Unable to write to sheet "${sheetName}". Either the sheet doesn't exist, ` +
+                                    `Unable to write to sheet "${sheetLabelForLogs}". Either the sheet doesn't exist, ` +
                                     `you don't have write permission, or there was a problem with the range format. ` +
                                     `Check the Output panel for details.`
                                 );
@@ -519,13 +600,97 @@ export class GoogleSheetsService {
                 }
 
                 logger.info(
-                    `Successfully uploaded data to spreadsheet ${spreadsheetId}, sheet ${sheetName}, starting at ${startCell}`
+                    `Successfully uploaded data to spreadsheet ${spreadsheetId}, sheet ${sheetName}, starting at ${resolvedStartCell}`
                 );
                 logger.revealOutput();
 
+                let namedRangeCreated = false;
+                let namedRangeUpdated = false;
+
+                if (startNamedRange) {
+                    const startColumnIndex = this.columnToIndex(startColumn);
+                    const startRowIndex = startRow - 1;
+                    const effectiveSheetId = typeof targetSheetId === 'number'
+                        ? targetSheetId
+                        : (typeof matchedNamedRange?.range?.sheetId === 'number' ? matchedNamedRange.range.sheetId : undefined);
+
+                    const namedRangeRange: sheets_v4.Schema$GridRange = {
+                        sheetId: effectiveSheetId,
+                        startRowIndex,
+                        endRowIndex: startRowIndex + 1,
+                        startColumnIndex,
+                        endColumnIndex: startColumnIndex + 1
+                    };
+
+                    if ((!matchedNamedRange || !matchedNamedRange.range) && namedRangeNeedsCreation) {
+                        try {
+                            await sheets.spreadsheets.batchUpdate({
+                                spreadsheetId,
+                                requestBody: {
+                                    requests: [
+                                        {
+                                            addNamedRange: {
+                                                namedRange: {
+                                                    name: startNamedRange,
+                                                    range: namedRangeRange
+                                                }
+                                            }
+                                        }
+                                    ]
+                                }
+                            });
+                            namedRangeCreated = true;
+                            logger.info(`Created named range "${startNamedRange}" at ${resolvedStartCell}.`, { audience: ['developer'] });
+                        } catch (err) {
+                            logger.warn(`Failed to create named range "${startNamedRange}"`, { data: err });
+                        }
+                    } else if (matchedNamedRange && matchedNamedRange.range && matchedNamedRange.namedRangeId) {
+                        const existingRange = matchedNamedRange.range;
+                        const existingSheetId = typeof existingRange.sheetId === 'number' ? existingRange.sheetId : targetSheetId;
+                        const hasDifferentSheet = typeof namedRangeRange.sheetId === 'number' && typeof existingSheetId === 'number' && namedRangeRange.sheetId !== existingSheetId;
+                        const needsRangeUpdate = hasDifferentSheet
+                            || existingRange.startRowIndex !== namedRangeRange.startRowIndex
+                            || existingRange.endRowIndex !== namedRangeRange.endRowIndex
+                            || existingRange.startColumnIndex !== namedRangeRange.startColumnIndex
+                            || existingRange.endColumnIndex !== namedRangeRange.endColumnIndex;
+
+                        if (needsRangeUpdate) {
+                            try {
+                                await sheets.spreadsheets.batchUpdate({
+                                    spreadsheetId,
+                                    requestBody: {
+                                        requests: [
+                                            {
+                                                updateNamedRange: {
+                                                    namedRange: {
+                                                        namedRangeId: matchedNamedRange.namedRangeId,
+                                                        name: startNamedRange,
+                                                        range: namedRangeRange
+                                                    },
+                                                    fields: 'range'
+                                                }
+                                            }
+                                        ]
+                                    }
+                                });
+                                namedRangeUpdated = true;
+                                logger.info(`Updated named range "${startNamedRange}" to ${resolvedStartCell}.`, { audience: ['developer'] });
+                            } catch (err) {
+                                logger.warn(`Failed to update named range "${startNamedRange}"`, { data: err });
+                            }
+                        }
+                    }
+                }
+
                 return {
                     range,
-                    sheetId: targetSheetId
+                    sheetId: targetSheetId,
+                    startCell: resolvedStartCell,
+                    startColumn,
+                    startRow,
+                    startNamedRange: startNamedRange || undefined,
+                    namedRangeCreated,
+                    namedRangeUpdated
                 };
             });
         } catch (err) {

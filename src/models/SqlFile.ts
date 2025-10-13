@@ -34,7 +34,7 @@ export class SqlFile {
         }
 
         // Check if the parameter already exists
-        const paramRegex = new RegExp(`--${key}:\\s*.*`, 'g');
+        const paramRegex = new RegExp(`--${key}:[\\t ]*[^\\r\\n]*`, 'g');
         const match = paramRegex.exec(queryText);
 
         if (match) {
@@ -81,7 +81,7 @@ export class SqlFile {
             const startOffset = text.indexOf(block, currentOffset);
             const endOffset = startOffset + blockWithSemicolon.length;
 
-            const regex = /--(\w+):\s*(.*)/g;
+            const regex = /--(\w+):[\t ]*(.*)/g;
             let match;
             const params: { [key: string]: string } = {};
             let queryText = block;
@@ -95,14 +95,18 @@ export class SqlFile {
                 queryText = block.substring(firstSelect);
             }
 
+            const combinedStartParameter = SqlSheetConfiguration.parseStartCellParameter(params['start_cell']);
+            const startNamedRange = combinedStartParameter.startNamedRange ?? params['start_named_range'];
+            const startCell = combinedStartParameter.startCell ?? (!startNamedRange ? params['start_cell'] : undefined);
+
             // Process boolean parameters using centralized validation in SqlSheetConfiguration
             // If the parameter doesn't exist in the SQL comment, it will be undefined
             // and the constructor will use the default value (false)
             const config = new SqlSheetConfiguration(
                 params['spreadsheet_id'],
                 params['sheet_name'],
-                params['start_cell'],
-                params['start_named_range'],
+                startCell,
+                startNamedRange,
                 params['name'],
                 params['table_name'],
                 params['pre_file'],

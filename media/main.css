@@ -23,3 +23,10 @@ vscode-text-field {
     width: 100%;
     box-sizing: border-box;
 }
+
+.start-cell-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 6px;
+    align-items: center;
+}

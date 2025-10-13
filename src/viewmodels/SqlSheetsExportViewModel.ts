@@ -1,9 +1,19 @@
 import * as vscode from 'vscode';
+import { createHash } from 'crypto';
 import { getGoogleSheetsExportService } from '../services/googleSheetsExportService';
 import { getSnowflakeService } from '../services/snowflakeService';
 import { SqlQuery } from '../models/SqlQuery';
 import { SqlSheetConfiguration } from '../models/SqlSheetConfiguration';
+import type { SheetUploadResult } from '../services/googleSheetsService';
+import { SqlFile } from '../models/SqlFile';
 import { getLogger } from '../services/loggingService';
+
+export enum ExportResult {
+    Exported = 'exported',
+    SkippedMissingConfig = 'skipped_missing_config',
+    UserCancelled = 'user_cancelled',
+    ExecutedCreate = 'executed_create'
+}
 
 const logger = getLogger();
 
@@ -17,7 +27,7 @@ export class SqlSheetsExportViewModel {
      */
     public async exportQueryToSheets(
         sqlQuery: SqlQuery,
-    ): Promise<void> {
+    ): Promise<ExportResult> {
         try {
             if (!sqlQuery) {
                 throw new Error('No SQL query provided for export');
@@ -25,7 +35,7 @@ export class SqlSheetsExportViewModel {
 
             if (sqlQuery.config.skip) {
                 logger.info('Skipping query export because the configuration is marked to skip.');
-                return;
+                return ExportResult.SkippedMissingConfig;
             }
 
             const hasRequiredConfig = this._hasRequiredConfig(sqlQuery.config);
@@ -34,12 +44,14 @@ export class SqlSheetsExportViewModel {
             if (!hasRequiredConfig) {
                 if (isCreateStatement) {
                     await this._executeCreateStatement(sqlQuery.queryText);
-                } else {
-                    logger.info(
-                        'Skipping query export because spreadsheet_id, sheet_name, and start_cell are required.', { audience: ['support'] }
-                    );
+                    return ExportResult.ExecutedCreate;
                 }
-                return;
+
+                logger.info(
+                    'Skipping query export because spreadsheet_id, sheet_name, and a start cell or named range are required.',
+                    { audience: ['support'] }
+                );
+                return ExportResult.SkippedMissingConfig;
             }
 
             const completedConfig = await this._promptForMissingConfig(
@@ -47,18 +59,27 @@ export class SqlSheetsExportViewModel {
                 sqlQuery.config.name ?? 'SQL Query Result'
             );
             if (!completedConfig) {
-                return;
+                return ExportResult.UserCancelled;
             }
 
             // Get the export service and perform the export
+            const effectiveConfig = this._ensureNamedRange(sqlQuery, completedConfig);
+
             const exportService = getGoogleSheetsExportService();
-            await exportService.exportQueryToSheet(sqlQuery.queryText, completedConfig);
+            const uploadResult = await exportService.exportQueryToSheet(sqlQuery.queryText, effectiveConfig);
+
+            if (uploadResult) {
+                await this._updateStartCellParameter(sqlQuery, uploadResult);
+            }
+
+            return ExportResult.Exported;
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
             logger.error('Failed to export SQL query via view model', { data: err });
             vscode.window.showErrorMessage(
                 `Failed to export SQL query to Google Sheets: ${errorMessage}`
             );
+            throw err;
         }
     }
 
@@ -80,6 +101,7 @@ export class SqlSheetsExportViewModel {
             transpose,
             data_only,
         } = config;
+        let startNamedRange = config.start_named_range;
 
         if (!spreadsheet_id) {
             spreadsheet_id = await vscode.window.showInputBox({
@@ -97,20 +119,33 @@ export class SqlSheetsExportViewModel {
             if (sheet_name === undefined) { return undefined; }
         }
 
-        if (!start_cell) {
-            start_cell = await vscode.window.showInputBox({
-                prompt: 'Enter the start cell',
+        if (!start_cell && !startNamedRange) {
+            const startInput = await vscode.window.showInputBox({
+                prompt: 'Enter the start location (cell or "NamedRange | Cell")',
                 value: 'A1',
-                validateInput: value => value && /^[A-Za-z]+[0-9]+$/.test(value) ? null : 'Invalid cell reference'
+                validateInput: value => {
+                    if (!value || value.trim().length === 0) {
+                        return 'A start location is required';
+                    }
+                    const parsed = SqlSheetConfiguration.parseStartCellParameter(value);
+                    if (!parsed.startCell && !parsed.startNamedRange) {
+                        return 'Provide a cell like "A1", a named range, or combine them as "MyRange | A1".';
+                    }
+                    return null;
+                }
             });
-            if (start_cell === undefined) { return undefined; }
+            if (startInput === undefined) { return undefined; }
+
+            const parsed = SqlSheetConfiguration.parseStartCellParameter(startInput);
+            start_cell = parsed.startCell ?? (!parsed.startNamedRange ? startInput : undefined);
+            startNamedRange = parsed.startNamedRange;
         }
 
         return new SqlSheetConfiguration(
             spreadsheet_id,
             sheet_name,
             start_cell,
-            config.start_named_range,
+            startNamedRange,
             name || defaultTableTitle,
             config.table_name,
             config.pre_file,
@@ -123,9 +158,9 @@ export class SqlSheetsExportViewModel {
     private _hasRequiredConfig(config: SqlSheetConfiguration): boolean {
         const hasSpreadsheetId = typeof config.spreadsheet_id === 'string' && config.spreadsheet_id.trim().length > 0;
         const hasSheetName = typeof config.sheet_name === 'string' && config.sheet_name.trim().length > 0;
-        const hasStartCell = typeof config.start_cell === 'string' && config.start_cell.trim().length > 0;
+        const hasStartLocation = config.hasStartLocation();
 
-        return hasSpreadsheetId && hasSheetName && hasStartCell;
+        return hasSpreadsheetId && hasSheetName && hasStartLocation;
     }
 
     private _isCreateStatement(queryText: string): boolean {
@@ -161,6 +196,80 @@ export class SqlSheetsExportViewModel {
                 vscode.window.showErrorMessage(`Failed to execute CREATE statement: ${errorMessage}`);
             }
         });
+    }
+
+    private _ensureNamedRange(
+        query: SqlQuery,
+        config: SqlSheetConfiguration
+    ): SqlSheetConfiguration {
+        const hasNamedRange = typeof config.start_named_range === 'string' && config.start_named_range.trim().length > 0;
+        if (hasNamedRange) {
+            return config;
+        }
+
+        const generatedName = this._generateDeterministicNamedRange(query, config);
+        logger.info(`Generated named range "${generatedName}" for export run.`, { audience: ['developer'] });
+
+        return new SqlSheetConfiguration(
+            config.spreadsheet_id,
+            config.sheet_name,
+            config.start_cell,
+            generatedName,
+            config.name,
+            config.table_name,
+            config.pre_file,
+            config.transpose,
+            config.data_only,
+            config.skip
+        );
+    }
+
+    private _generateDeterministicNamedRange(
+        query: SqlQuery,
+        config: SqlSheetConfiguration
+    ): string {
+        const editor = vscode.window.activeTextEditor;
+        const sqlFilePath = editor?.document?.uri.fsPath ?? 'unknown-sql-file';
+        const tableTitle = config.name ?? config.table_name ?? 'SQL Query Result';
+        const sheetIdentifier = config.sheet_name ?? '';
+        const startCell = config.start_cell ?? '';
+
+        const seed = `${sqlFilePath}|${tableTitle}|${sheetIdentifier}|${startCell}|${query.startOffset}|${query.endOffset}`;
+        const hash = createHash('md5').update(seed).digest('hex').slice(0, 10);
+        return `SQLS_${hash}`;
+    }
+
+    private async _updateStartCellParameter(
+        query: SqlQuery,
+        uploadResult: SheetUploadResult
+    ): Promise<void> {
+        const namedRangeFromResult = uploadResult.startNamedRange ?? query.config.start_named_range;
+        if (!namedRangeFromResult) {
+            return; // Only update files when a named range is involved
+        }
+
+        const newCombinedValue = SqlSheetConfiguration.formatStartCellParameter(
+            namedRangeFromResult,
+            uploadResult.startCell
+        );
+
+        const existingCombinedValue = SqlSheetConfiguration.formatStartCellParameter(
+            query.config.start_named_range,
+            query.config.start_cell
+        );
+
+        if (newCombinedValue.length === 0 || newCombinedValue === existingCombinedValue) {
+            return;
+        }
+
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || (editor.document.languageId !== 'sql' && editor.document.languageId !== 'snowflake-sql')) {
+            return;
+        }
+
+        const sqlFile = new SqlFile(editor.document);
+        await sqlFile.updateParameter(query, 'start_cell', newCombinedValue);
+        logger.info(`Updated start_cell parameter to "${newCombinedValue}" in SQL file.`, { audience: ['developer'] });
     }
 }
 

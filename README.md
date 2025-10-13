@@ -69,8 +69,8 @@ The following parameters are supported:
 
 - `spreadsheet_id`: The Google Sheet ID where results will be sent
 - `sheet_name`: The name or index of the sheet within the spreadsheet
-- `start_cell`: The cell where output should begin (e.g., "A1")
-- `start_named_range`: Alternative to start_cell, can use a named range in Google Sheets
+- `start_cell`: The cell where output should begin (e.g., "A1"). You can also combine a named range by writing `MyNamedRange | A1`, or provide just the named range name to anchor the export dynamically. When a named range is supplied, the extension keeps the range anchored to the first cell and will create or update the named range automatically after each export.
+- `start_named_range`: (Legacy) Alternative to `start_cell` for referencing a named range. Prefer the combined `start_cell` syntax above.
 - `transpose`: Set to "true" to transpose the output data
 - `name`: A title for the table
 - `data_only`: Set to "true" to output only data without headers

@@ -6,7 +6,7 @@ import { SqlQuery } from '../models/SqlQuery';
 export class SqlSheetViewModel {
     // Get all parameter keys from SqlSheetConfiguration using reflection
     private static _parameterKeys: string[] = Object.getOwnPropertyNames(
-        new SqlSheetConfiguration()).filter(key => key !== 'constructor');
+        new SqlSheetConfiguration()).filter(key => key !== 'constructor' && key !== 'start_named_range');
 
     // Expose the keys as a property
     public get parameterKeys(): string[] {

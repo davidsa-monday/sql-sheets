@@ -20,16 +20,20 @@ export class GoogleSheetsExportService {
     public async exportQueryToSheet(
         sqlQuery: string,
         config: SqlSheetConfiguration
-    ): Promise<void> {
+    ): Promise<SheetUploadResult | void> {
         const {
             spreadsheet_id: spreadsheetId,
             sheet_name: sheetName,
             start_cell: startCell,
+            start_named_range: startNamedRange,
             name: tableTitle,
             transpose,
             data_only: dataOnly,
             skip
         } = config;
+
+        const cleanedStartNamedRange = typeof startNamedRange === 'string' ? startNamedRange.trim() : undefined;
+        const cleanedStartCell = typeof startCell === 'string' ? startCell.trim() : undefined;
 
         if (skip) {
             logger.info('Skipping query execution because configuration is marked skip', { audience: ['developer'] });
@@ -59,35 +63,39 @@ export class GoogleSheetsExportService {
             logger.revealOutput();
         }
 
-        if (!startCell) {
-            throw new Error('Start cell is required');
+        if (!cleanedStartCell && !cleanedStartNamedRange) {
+            throw new Error('A start cell or named range is required');
         }
 
-        // Validate start cell format
-        try {
-            // More comprehensive validation of cell format (e.g. A1, B12, AC345)
-            const validCellFormat = /^[A-Za-z]+[0-9]+$/;
-            if (!validCellFormat.test(startCell)) {
-                throw new Error(`Start cell must be in the format like 'A1', 'B2', etc.`);
+        if (cleanedStartCell) {
+            // Validate start cell format
+            try {
+                const validCellFormat = /^[A-Za-z]+[0-9]+$/;
+                if (!validCellFormat.test(cleanedStartCell)) {
+                    throw new Error(`Start cell must be in the format like 'A1', 'B2', etc.`);
+                }
+
+                const columnPart = cleanedStartCell.match(/^[A-Za-z]+/)?.[0] || '';
+                const rowPart = cleanedStartCell.match(/[0-9]+$/)?.[0] || '';
+
+                if (!columnPart || columnPart.length === 0) {
+                    throw new Error(`Invalid column reference in start cell: ${cleanedStartCell}`);
+                }
+
+                if (!rowPart || parseInt(rowPart, 10) <= 0) {
+                    throw new Error(`Invalid row reference in start cell: ${cleanedStartCell}`);
+                }
+
+                logger.info(`Using start cell: ${cleanedStartCell} (column: ${columnPart}, row: ${rowPart})`, { audience: ['developer'] });
+                logger.revealOutput();
+            } catch (err) {
+                throw new Error(`Invalid start cell format: ${err instanceof Error ? err.message : String(err)}`);
             }
+        }
 
-            // Extract and validate column and row parts
-            const columnPart = startCell.match(/^[A-Za-z]+/)?.[0] || '';
-            const rowPart = startCell.match(/[0-9]+$/)?.[0] || '';
-
-            if (!columnPart || columnPart.length === 0) {
-                throw new Error(`Invalid column reference in start cell: ${startCell}`);
-            }
-
-            if (!rowPart || parseInt(rowPart, 10) <= 0) {
-                throw new Error(`Invalid row reference in start cell: ${startCell}`);
-            }
-
-            // Log the validated cell for debugging
-            logger.info(`Using start cell: ${startCell} (column: ${columnPart}, row: ${rowPart})`, { audience: ['developer'] });
+        if (cleanedStartNamedRange) {
+            logger.info(`Using start named range: ${cleanedStartNamedRange}`, { audience: ['developer'] });
             logger.revealOutput();
-        } catch (err) {
-            throw new Error(`Invalid start cell format: ${err instanceof Error ? err.message : String(err)}`);
         }
 
         try {
@@ -127,8 +135,9 @@ export class GoogleSheetsExportService {
                 dataToUpload,
                 spreadsheetId,
                 sheetName,
-                startCell,
+                cleanedStartCell,
                 {
+                    startNamedRange: cleanedStartNamedRange,
                     transpose: transpose,
                     tableTitle: tableTitle,
                     dataOnly: dataOnly,
@@ -155,6 +164,7 @@ export class GoogleSheetsExportService {
                     }
                 });
 
+            return uploadResult;
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
             logger.error('Failed to export query to Google Sheet', { data: err });
@@ -220,13 +230,28 @@ export function registerExportQueryToSheetCommand(context: vscode.ExtensionConte
                 return; // User cancelled
             }
 
-            // Prompt for start cell
-            const startCell = await vscode.window.showInputBox({
-                prompt: 'Enter the start cell',
-                placeHolder: 'A1'
+            // Prompt for start location
+            const startLocationInput = await vscode.window.showInputBox({
+                prompt: 'Enter the start location (cell or "NamedRange | Cell")',
+                placeHolder: 'A1 or MyNamedRange | B2'
             });
-            if (!startCell) {
+            if (startLocationInput === undefined) {
                 return; // User cancelled
+            }
+
+            const trimmedStartInput = startLocationInput.trim();
+            if (trimmedStartInput.length === 0) {
+                vscode.window.showErrorMessage('A start location is required.');
+                return;
+            }
+
+            const parsedStart = SqlSheetConfiguration.parseStartCellParameter(trimmedStartInput);
+            const resolvedStartCell = parsedStart.startCell ?? (!parsedStart.startNamedRange ? trimmedStartInput : undefined);
+            const resolvedStartNamedRange = parsedStart.startNamedRange;
+
+            if (!resolvedStartCell && !resolvedStartNamedRange) {
+                vscode.window.showErrorMessage('Enter a valid start cell (e.g., "A1") or named range (e.g., "MyRange"), or combine them as "MyRange | A1".');
+                return;
             }
 
             // Prompt for table title
@@ -251,8 +276,8 @@ export function registerExportQueryToSheetCommand(context: vscode.ExtensionConte
             const config = new SqlSheetConfiguration(
                 spreadsheetId,
                 sheetName,
-                startCell,
-                undefined, // start_named_range
+                resolvedStartCell,
+                resolvedStartNamedRange,
                 tableTitle,
                 undefined, // name_t
                 undefined, // pre_file

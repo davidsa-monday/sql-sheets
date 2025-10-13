@@ -72,6 +72,59 @@ function updateGrid(config) {
         let field;
         const type = parameterTypes[key];
 
+        if (key === 'start_cell') {
+            const namedRangeValue = safeConfig['start_named_range'] || '';
+            const cellValue = safeConfig[key] || '';
+
+            const container = document.createElement('div');
+            container.className = 'start-cell-fields';
+
+            const namedRangeField = document.createElement('vscode-text-field');
+            namedRangeField.id = `field-${key}-named-range`;
+            namedRangeField.value = namedRangeValue;
+            namedRangeField.placeholder = 'Named range';
+            if (descriptions['start_named_range']) {
+                namedRangeField.title = descriptions['start_named_range'];
+            }
+
+            const cellField = document.createElement('vscode-text-field');
+            cellField.id = `field-${key}`;
+            cellField.value = cellValue;
+            cellField.placeholder = 'Cell (e.g., A1)';
+            if (descriptions[key]) {
+                cellField.title = descriptions[key];
+            }
+
+            const emitCombinedUpdate = () => {
+                const rangePart = (namedRangeField.value || '').trim();
+                const cellPart = (cellField.value || '').trim();
+                let combined = '';
+                if (rangePart && cellPart) {
+                    combined = `${rangePart} | ${cellPart}`;
+                } else if (rangePart) {
+                    combined = rangePart;
+                } else {
+                    combined = cellPart;
+                }
+
+                vscode.postMessage({
+                    type: 'edit',
+                    key: key,
+                    value: combined
+                });
+            };
+
+            namedRangeField.addEventListener('change', emitCombinedUpdate);
+            cellField.addEventListener('change', emitCombinedUpdate);
+
+            container.appendChild(namedRangeField);
+            container.appendChild(cellField);
+
+            form.appendChild(label);
+            form.appendChild(container);
+            return;
+        }
+
         // Create appropriate field based on parameter type
         if (type === 'boolean') {
             field = document.createElement('vscode-dropdown');
