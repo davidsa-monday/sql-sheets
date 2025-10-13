@@ -12,6 +12,25 @@ import { getSqlSheetsExportViewModel } from './viewmodels/SqlSheetsExportViewMod
 import { SqlFile } from './models/SqlFile';
 import { SqlQuery } from './models/SqlQuery';
 
+// Suppress specific Node.js warnings to keep the extension host logs readable while testing.
+process.on('warning', (warning) => {
+        if (
+                warning.name === 'DeprecationWarning' &&
+                warning.message.includes('The `punycode` module is deprecated')
+        ) {
+                return;
+        }
+
+        if (
+                warning.name === 'ExperimentalWarning' &&
+                warning.message.includes('SQLite is an experimental feature')
+        ) {
+                return;
+        }
+
+        console.warn(warning.stack ?? warning.message);
+});
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
