@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import { SqlSheetConfiguration } from '../models/SqlSheetConfiguration';
 import { getGoogleSheetsService } from './googleSheetsService';
 import type { SheetUploadResult } from './googleSheetsService';
 import { getSnowflakeService } from './snowflakeService';
@@ -14,23 +15,28 @@ export class GoogleSheetsExportService {
     /**
      * Export SQL query results to a Google Sheet
      * @param sqlQuery The SQL query to execute
-     * @param spreadsheetId The Google Sheets spreadsheet ID
-     * @param sheetName The name or ID of the sheet
-     * @param startCell The cell where the data should start (e.g. "A1")
-     * @param options Additional export options
+     * @param config The configuration for the SQL sheet
      * @returns A promise that resolves when the export is complete
      */
     public async exportQueryToSheet(
         sqlQuery: string,
-        spreadsheetId: string,
-        sheetName: string | number,
-        startCell: string,
-        options: {
-            transpose?: boolean,
-            tableTitle?: string,
-            dataOnly?: boolean
-        } = {}
+        config: SqlSheetConfiguration
     ): Promise<void> {
+        const {
+            spreadsheet_id: spreadsheetId,
+            sheet_name: sheetName,
+            start_cell: startCell,
+            name: tableTitle,
+            transpose,
+            data_only: dataOnly,
+            skip
+        } = config;
+
+        if (skip) {
+            outputChannel.appendLine('Skipping query execution as "skip" is set to true.');
+            return;
+        }
+
         // Validate inputs
         if (!sqlQuery) {
             throw new Error('SQL query is required');
@@ -85,8 +91,6 @@ export class GoogleSheetsExportService {
             throw new Error(`Invalid start cell format: ${err instanceof Error ? err.message : String(err)}`);
         }
 
-        const { transpose = false, tableTitle = 'SQL Query Result', dataOnly = false } = options;
-
         try {
             // Get the services
             const snowflakeService = getSnowflakeService();
@@ -98,249 +102,173 @@ export class GoogleSheetsExportService {
             }
 
             if (!googleService.isConfigured()) {
-                throw new Error('Google Sheets service is not configured. Please configure a Google Service Account JSON file in the settings.');
+                throw new Error('Google Sheets API is not configured');
             }
 
-            // Show progress notification
-            const uploadSummary = await vscode.window.withProgress<SheetUploadResult>({
-                location: vscode.ProgressLocation.Notification,
-                title: 'Exporting SQL query to Google Sheets',
-                cancellable: false
-            }, async (progress) => {
-                // Execute the SQL query
-                progress.report({ message: 'Executing SQL query...' });
-                outputChannel.appendLine('Executing SQL query...');
-                const results = await snowflakeService.executeQuery(sqlQuery);
+            // Execute the query using the Snowflake service
+            outputChannel.appendLine('Executing query in Snowflake...');
+            outputChannel.show(true); // Show the output channel
+            const results = await snowflakeService.executeQuery(sqlQuery);
+            outputChannel.appendLine('Query executed successfully.');
 
-                // Log result info
-                outputChannel.appendLine(`Query returned ${results.length} row(s)`);
-                if (results.length > 0) {
-                    outputChannel.appendLine(`First row sample: ${JSON.stringify(results[0], null, 2)}`);
-                }
+            // Check if there are results to upload
+            if (results.length === 0) {
+                outputChannel.appendLine('Query returned no results. Nothing to upload.');
+                return;
+            }
 
-                // Convert results to an appropriate format for Google Sheets
-                progress.report({ message: 'Processing results...' });
-                outputChannel.appendLine('Processing results for Google Sheets format...');
-                const processedResults = this._processQueryResults(results);
+            // Prepare the data for Google Sheets
+            const headers = Object.keys(results[0]);
+            const data = results.map(row => Object.values(row));
+            const dataToUpload = dataOnly ? data : [headers, ...data];
 
-                // Log processed data info
-                outputChannel.appendLine(`Processed data has ${processedResults.length} row(s)`);
-                if (processedResults.length > 0) {
-                    outputChannel.appendLine(`Headers: ${JSON.stringify(processedResults[0])}`);
-                    outputChannel.appendLine(`Data dimensions: ${processedResults.length} rows x ${processedResults[0].length} columns`);
-
-                    // Debug the full structure to see what's happening with the data
-                    outputChannel.appendLine(`First two rows of processed data (for debugging):`);
-                    for (let i = 0; i < Math.min(2, processedResults.length); i++) {
-                        outputChannel.appendLine(`Row ${i}: ${JSON.stringify(processedResults[i])}`);
-                    }
-                }
-                outputChannel.show(true);
-
-                // Export to Google Sheets
-                progress.report({ message: 'Uploading to Google Sheets...' });
-
-                // Process sheet name - if it's a string that looks like a number, convert it to actual number
-                let processedSheetName = sheetName;
-                if (typeof sheetName === 'string' && /^\d+$/.test(sheetName)) {
-                    // Convert to number if it's a numeric string
-                    processedSheetName = parseInt(sheetName, 10);
-                    outputChannel.appendLine(`Converting sheet name "${sheetName}" to numeric ID: ${processedSheetName}`);
-                    outputChannel.show(true);
-                }
-
-                const queryForNote = this.extractQueryForNote(sqlQuery);
-
-                const uploadResult = await googleService.uploadDataToSheet(
-                    processedResults,
-                    spreadsheetId,
-                    processedSheetName,
-                    startCell,
-                    {
-                        transpose,
-                        tableTitle,
-                        dataOnly,
-                        sqlQuery,
-                        queryForNote,
-                        autoCreateSheet: true // Explicitly enable sheet auto-creation
-                    }
-                );
-                progress.report({ message: 'Export completed successfully' });
-                return uploadResult;
-            });
-
-            // Show success message
-            const sheetNameDisplay = typeof sheetName === 'number' ? `Sheet ID ${sheetName}` : sheetName;
-            vscode.window.showInformationMessage(
-                `Successfully exported SQL results to "${sheetNameDisplay}" at ${startCell}`
-            );
-
-            const fallbackSheetId = typeof sheetName === 'number'
-                ? sheetName
-                : (/^\d+$/.test(sheetName) ? parseInt(sheetName, 10) : undefined);
-            const sheetIdForUrl = uploadSummary?.sheetId ?? fallbackSheetId;
-            const rangeForUrl = this.extractRangeForUrl(uploadSummary?.range);
-            const spreadsheetUrl = this.buildSpreadsheetUrl(spreadsheetId, sheetIdForUrl, rangeForUrl);
-
-            // Open the spreadsheet directly at the exported range
-            vscode.env.openExternal(vscode.Uri.parse(spreadsheetUrl));
-
-
-        } catch (err) {
-            vscode.window.showErrorMessage(`Failed to export SQL query to Google Sheets: ${err instanceof Error ? err.message : String(err)}`);
-            throw err;
-        }
-    }
-
-    private extractRangeForUrl(range: string | undefined): string | undefined {
-        if (!range) {
-            return undefined;
-        }
-
-        const separatorIndex = range.indexOf('!');
-        const rangePortion = separatorIndex >= 0 ? range.slice(separatorIndex + 1) : range;
-        const trimmed = rangePortion.trim();
-
-        return trimmed.length > 0 ? trimmed : undefined;
-    }
-
-    private buildSpreadsheetUrl(
-        spreadsheetId: string,
-        sheetId: number | undefined,
-        range: string | undefined
-    ): string {
-        const baseUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
-        const hashParts: string[] = [];
-
-        if (typeof sheetId === 'number' && !Number.isNaN(sheetId)) {
-            hashParts.push(`gid=${sheetId}`);
-        }
-
-        if (range) {
-            hashParts.push(`range=${encodeURIComponent(range)}`);
-        }
-
-        return hashParts.length > 0 ? `${baseUrl}#${hashParts.join('&')}` : baseUrl;
-    }
-
-    private extractQueryForNote(sql: string | undefined): string | undefined {
-        if (!sql) {
-            return undefined;
-        }
-
-        const lines = sql.split(/\r?\n/);
-        const filtered = lines.filter(line => {
-            const trimmed = line.trim();
-            return trimmed.length === 0 || !/^--\s*[A-Za-z_][\w-]*\s*:/i.test(trimmed);
-        });
-
-        const result = filtered.join('\n').trim();
-        return result.length > 0 ? result : undefined;
-    }
-
-    /**
-     * Export SQL file to a Google Sheet
-     * @param filePath The SQL file path
-     * @param spreadsheetId The Google Sheets spreadsheet ID
-     * @param sheetName The name or ID of the sheet
-     * @param startCell The cell where the data should start (e.g. "A1")
-     * @param options Additional export options
-     * @returns A promise that resolves when the export is complete
-     */
-    public async exportSqlFileToSheet(
-        filePath: string,
-        spreadsheetId: string,
-        sheetName: string | number,
-        startCell: string,
-        options: {
-            transpose?: boolean,
-            tableTitle?: string,
-            dataOnly?: boolean
-        } = {}
-    ): Promise<void> {
-        try {
-            // Read the SQL file
-            const fileContent = fs.readFileSync(filePath, 'utf-8');
-
-            // Set the table title to the file name if not provided
-            const fileName = filePath.split('/').pop() || filePath;
-            const tableTitle = options.tableTitle || fileName;
-
-            // Export the query
-            await this.exportQueryToSheet(
-                fileContent,
+            // Upload the data to Google Sheets
+            outputChannel.appendLine('Uploading data to Google Sheets...');
+            const uploadResult: SheetUploadResult = await googleService.uploadDataToSheet(
+                dataToUpload,
                 spreadsheetId,
                 sheetName,
                 startCell,
                 {
-                    ...options,
-                    tableTitle
+                    transpose: transpose,
+                    tableTitle: tableTitle,
+                    dataOnly: dataOnly,
+                    sqlQuery: sqlQuery
                 }
             );
-        } catch (err) {
-            vscode.window.showErrorMessage(`Failed to export SQL file to Google Sheets: ${err instanceof Error ? err.message : String(err)}`);
-            throw err;
-        }
-    }
+            outputChannel.appendLine('Data uploaded successfully.');
 
-    /**
-     * Process query results into a format suitable for Google Sheets
-     * @param results The SQL query results
-     * @returns Processed results ready for Google Sheets
-     */
-    private _processQueryResults(results: any[]): any[][] {
-        if (!results || results.length === 0) {
-            return [['No results found']];
-        }
+            // Log the result details
+            outputChannel.appendLine(`Spreadsheet ID: ${spreadsheetId}`);
+            outputChannel.appendLine(`Sheet Name: ${sheetName}`);
+            outputChannel.appendLine(`Range: ${uploadResult.range}`);
 
-        // Extract column headers from the first result object
-        const headers = Object.keys(results[0]);
-        outputChannel.appendLine(`Processing results: Found ${headers.length} columns`);
-        outputChannel.appendLine(`Column headers: ${JSON.stringify(headers)}`);
-
-        try {
-            // Convert each result object to an array of values
-            const rows = results.map((row, rowIndex) => {
-                return headers.map(header => {
-                    const value = row[header];
-
-                    // Handle null values
-                    if (value === null) {
-                        return '';
+            // Show a success message to the user with a link to the sheet
+            const rangeParts = uploadResult.range.split('!');
+            const cellRange = rangeParts.length > 1 ? rangeParts[1] : '';
+            const sheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${uploadResult.sheetId}&range=${cellRange}`;
+            const openSheetButton = 'Open Sheet';
+            vscode.window.showInformationMessage(`Successfully exported query results to Google Sheet: ${sheetName}`, openSheetButton)
+                .then(selection => {
+                    if (selection === openSheetButton) {
+                        vscode.env.openExternal(vscode.Uri.parse(sheetUrl));
                     }
-
-                    // Handle dates
-                    if (value instanceof Date) {
-                        return value.toISOString();
-                    }
-
-                    return value;
                 });
-            });
 
-            // Create the final result with headers and rows
-            const processedData = [headers, ...rows];
-
-            // Log the dimensions for debugging
-            outputChannel.appendLine(`Processed data dimensions: ${processedData.length} rows x ${processedData[0]?.length || 0} columns`);
-            return processedData;
         } catch (err) {
-            outputChannel.appendLine(`Error processing query results: ${err instanceof Error ? err.message : String(err)}`);
-            // Return a safe fallback
-            return [['Error processing results'], [`${err instanceof Error ? err.message : String(err)}`]];
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            outputChannel.appendLine(`Error: ${errorMessage}`);
+            vscode.window.showErrorMessage(`Failed to export query to Google Sheet: ${errorMessage}`);
         }
     }
 }
 
-// Singleton instance
-let googleSheetsExportService: GoogleSheetsExportService | undefined;
-
 /**
- * Get the Google Sheets Export service instance
+ * Get the singleton instance of the GoogleSheetsExportService
+ * @returns The singleton instance of the GoogleSheetsExportService
  */
 export function getGoogleSheetsExportService(): GoogleSheetsExportService {
-    if (!googleSheetsExportService) {
-        googleSheetsExportService = new GoogleSheetsExportService();
+    const googleSheetsService = getGoogleSheetsService();
+    if (!googleSheetsService.isConfigured()) {
+        throw new Error('Google Sheets service is not configured. Please set the service account file in the settings.');
     }
-    return googleSheetsExportService;
+    return new GoogleSheetsExportService();
+}
+
+/**
+ * Command to export a SQL query to Google Sheets.
+ * This function will prompt the user for the necessary information.
+ * @param context The extension context
+ */
+export function registerExportQueryToSheetCommand(context: vscode.ExtensionContext) {
+    const command = 'sql-sheets.exportQueryToSheet';
+
+    const commandHandler = async () => {
+        // Get the active text editor
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showErrorMessage('No active SQL file found.');
+            return;
+        }
+
+        // Get the SQL query from the editor
+        const sqlQuery = editor.document.getText();
+        if (!sqlQuery) {
+            vscode.window.showErrorMessage('No SQL query found in the active editor.');
+            return;
+        }
+
+        try {
+            // Get the export service
+            const exportService = getGoogleSheetsExportService();
+
+            // Prompt for spreadsheet ID
+            const spreadsheetId = await vscode.window.showInputBox({
+                prompt: 'Enter the Google Sheets spreadsheet ID',
+                placeHolder: 'Spreadsheet ID'
+            });
+            if (!spreadsheetId) {
+                return; // User cancelled
+            }
+
+            // Prompt for sheet name
+            const sheetName = await vscode.window.showInputBox({
+                prompt: 'Enter the sheet name or ID',
+                placeHolder: 'Sheet1'
+            });
+            if (!sheetName) {
+                return; // User cancelled
+            }
+
+            // Prompt for start cell
+            const startCell = await vscode.window.showInputBox({
+                prompt: 'Enter the start cell',
+                placeHolder: 'A1'
+            });
+            if (!startCell) {
+                return; // User cancelled
+            }
+
+            // Prompt for table title
+            const tableTitle = await vscode.window.showInputBox({
+                prompt: 'Enter the table title (optional)',
+                placeHolder: 'SQL Query Result'
+            });
+
+            // Prompt for transpose
+            const transposeSelection = await vscode.window.showQuickPick(['No', 'Yes'], {
+                placeHolder: 'Transpose the data?'
+            });
+            const transpose = transposeSelection === 'Yes';
+
+            // Prompt for data only
+            const dataOnlySelection = await vscode.window.showQuickPick(['No', 'Yes'], {
+                placeHolder: 'Export data only (no headers)?'
+            });
+            const dataOnly = dataOnlySelection === 'Yes';
+
+            // Create a configuration object
+            const config = new SqlSheetConfiguration(
+                spreadsheetId,
+                sheetName,
+                startCell,
+                undefined, // start_named_range
+                tableTitle,
+                undefined, // name_t
+                undefined, // pre_file
+                transpose,
+                dataOnly,
+                false // skip
+            );
+
+            // Export the query to the sheet
+            await exportService.exportQueryToSheet(sqlQuery, config);
+
+        } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            vscode.window.showErrorMessage(`Failed to export query: ${errorMessage}`);
+        }
+    };
+
+    context.subscriptions.push(vscode.commands.registerCommand(command, commandHandler));
 }

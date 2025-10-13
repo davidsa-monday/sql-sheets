@@ -72,7 +72,7 @@ The following parameters are supported:
 - `start_cell`: The cell where output should begin (e.g., "A1")
 - `start_named_range`: Alternative to start_cell, can use a named range in Google Sheets
 - `transpose`: Set to "true" to transpose the output data
-- `table_name`: A title for the table
+- `name`: A title for the table
 - `data_only`: Set to "true" to output only data without headers
 - `skip`: Set to "true" to skip processing this query
 - `pre_file`: Path to a SQL file that should be executed before this query

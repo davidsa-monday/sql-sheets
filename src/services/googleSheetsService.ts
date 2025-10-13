@@ -438,9 +438,10 @@ export class GoogleSheetsService {
                     );
                 }
 
-                vscode.window.showInformationMessage(
+                outputChannel.appendLine(
                     `Successfully uploaded data to spreadsheet ${spreadsheetId}, sheet ${sheetName}, starting at ${startCell}`
                 );
+                outputChannel.show(true);
 
                 return {
                     range,

@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { getGoogleSheetsExportService } from '../services/googleSheetsExportService';
+import { SqlSheetConfiguration } from '../models/SqlSheetConfiguration';
+import { SqlFile } from '../models/SqlFile';
 
 /**
  * ViewModel for SQL to Sheets export functionality
@@ -13,26 +15,26 @@ export class SqlSheetsExportViewModel {
         sqlQuery: string,
     ): Promise<void> {
         try {
-            // Prompt for the export configuration
-            const exportConfig = await this._promptForExportConfig();
-            if (!exportConfig) {
+            // Get active text editor
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                throw new Error('No active editor found');
+            }
+
+            // Use SqlFile to parse the configuration
+            const sqlFile = new SqlFile(editor.document);
+            const query = sqlFile.getQueryAt(editor.selection.active);
+            let config = query?.config ?? new SqlSheetConfiguration();
+
+            // Prompt for any missing required configuration
+            const completeConfig = await this._promptForMissingConfig(config);
+            if (!completeConfig) {
                 return; // User cancelled
             }
 
-            const { spreadsheetId, sheetName, startCell, transpose, tableTitle } = exportConfig;
-
             // Get the export service and perform the export
             const exportService = getGoogleSheetsExportService();
-            await exportService.exportQueryToSheet(
-                sqlQuery,
-                spreadsheetId,
-                sheetName,
-                startCell,
-                {
-                    transpose,
-                    tableTitle
-                }
-            );
+            await exportService.exportQueryToSheet(sqlQuery, completeConfig);
         } catch (err) {
             vscode.window.showErrorMessage(
                 `Failed to export SQL query to Google Sheets: ${err instanceof Error ? err.message : String(err)}`
@@ -58,28 +60,22 @@ export class SqlSheetsExportViewModel {
             }
 
             // Get the file path and text content
-            const filePath = editor.document.uri.fsPath;
             const sqlContent = editor.document.getText();
+            const sqlFile = new SqlFile(editor.document);
+            // For the whole file, we can take the config from the first query
+            let config = sqlFile.queries[0]?.config ?? new SqlSheetConfiguration();
 
-            // Prompt for the export configuration
-            const exportConfig = await this._promptForExportConfig(editor.document.fileName);
-            if (!exportConfig) {
+            // Prompt for any missing required configuration
+            const completeConfig = await this._promptForMissingConfig(config, editor.document.fileName);
+            if (!completeConfig) {
                 return; // User cancelled
             }
-
-            const { spreadsheetId, sheetName, startCell, transpose, tableTitle } = exportConfig;
 
             // Get the export service and perform the export
             const exportService = getGoogleSheetsExportService();
             await exportService.exportQueryToSheet(
                 sqlContent,
-                spreadsheetId,
-                sheetName,
-                startCell,
-                {
-                    transpose,
-                    tableTitle
-                }
+                completeConfig
             );
         } catch (err) {
             vscode.window.showErrorMessage(
@@ -114,25 +110,22 @@ export class SqlSheetsExportViewModel {
                 throw new Error('No SQL query to export');
             }
 
-            // Prompt for the export configuration
-            const exportConfig = await this._promptForExportConfig('Selected Query');
-            if (!exportConfig) {
+            // Use SqlFile to parse the configuration from the active query
+            const sqlFile = new SqlFile(editor.document);
+            const query = sqlFile.getQueryAt(editor.selection.active);
+            let config = query?.config ?? new SqlSheetConfiguration();
+
+            // Prompt for any missing required configuration
+            const completeConfig = await this._promptForMissingConfig(config, 'Selected Query');
+            if (!completeConfig) {
                 return; // User cancelled
             }
-
-            const { spreadsheetId, sheetName, startCell, transpose, tableTitle } = exportConfig;
 
             // Get the export service and perform the export
             const exportService = getGoogleSheetsExportService();
             await exportService.exportQueryToSheet(
                 sqlQuery,
-                spreadsheetId,
-                sheetName,
-                startCell,
-                {
-                    transpose,
-                    tableTitle
-                }
+                completeConfig
             );
         } catch (err) {
             vscode.window.showErrorMessage(
@@ -143,113 +136,61 @@ export class SqlSheetsExportViewModel {
     }
 
     /**
-     * Prompt the user for the export configuration
-     * @param defaultTableTitle Default title for the table
-     * @returns The export configuration or undefined if cancelled
+     * Prompts the user for any missing required configuration values.
+     * @param config The partially filled configuration.
+     * @param defaultTableTitle Default title for the table.
+     * @returns The completed configuration or undefined if the user cancels.
      */
-    private async _promptForExportConfig(defaultTableTitle: string = 'SQL Query Result'): Promise<{
-        spreadsheetId: string;
-        sheetName: string;
-        startCell: string;
-        transpose: boolean;
-        tableTitle: string;
-    } | undefined> {
-        // Get the previous configuration if available
-        const config = vscode.workspace.getConfiguration('sql-sheets.export');
-        const previousSpreadsheetId = config.get<string>('lastSpreadsheetId') || '';
-        const previousSheetName = config.get<string>('lastSheetName') || '';
-        const previousStartCell = config.get<string>('lastStartCell') || 'A1';
-
-        // Prompt for spreadsheet ID
-        const spreadsheetId = await vscode.window.showInputBox({
-            prompt: 'Enter the Google Sheets spreadsheet ID',
-            value: previousSpreadsheetId,
-            placeHolder: '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms',
-            validateInput: (value) => {
-                if (!value || !value.trim()) {
-                    return 'Spreadsheet ID is required';
-                }
-                return null;
-            }
-        });
-
-        if (!spreadsheetId) {
-            return undefined;
-        }
-
-        // Prompt for sheet name
-        const sheetName = await vscode.window.showInputBox({
-            prompt: 'Enter the sheet name or ID',
-            value: previousSheetName,
-            placeHolder: 'Sheet1',
-            validateInput: (value) => {
-                if (!value || !value.trim()) {
-                    return 'Sheet name or ID is required';
-                }
-                return null;
-            }
-        });
-
-        if (!sheetName) {
-            return undefined;
-        }
-
-        // Prompt for start cell
-        const startCell = await vscode.window.showInputBox({
-            prompt: 'Enter the start cell',
-            value: previousStartCell,
-            placeHolder: 'A1',
-            validateInput: (value) => {
-                if (!value || !value.trim()) {
-                    return 'Start cell is required';
-                }
-                // Check if the cell reference is valid (e.g. A1, B10)
-                if (!value.match(/^[A-Za-z]+[0-9]+$/)) {
-                    return 'Invalid cell reference. Please use format like A1, B10, etc.';
-                }
-                return null;
-            }
-        });
-
-        if (!startCell) {
-            return undefined;
-        }
-
-        // Prompt for table title
-        const tableTitle = await vscode.window.showInputBox({
-            prompt: 'Enter the table title',
-            value: defaultTableTitle,
-            placeHolder: 'SQL Query Result'
-        });
-
-        if (tableTitle === undefined) {
-            return undefined;
-        }
-
-        // Prompt for transpose option
-        const transposeOptions = ['No', 'Yes'];
-        const transposeSelection = await vscode.window.showQuickPick(transposeOptions, {
-            placeHolder: 'Transpose the data?'
-        });
-
-        if (!transposeSelection) {
-            return undefined;
-        }
-
-        const transpose = transposeSelection === 'Yes';
-
-        // Save the configuration for next time
-        await config.update('lastSpreadsheetId', spreadsheetId, vscode.ConfigurationTarget.Global);
-        await config.update('lastSheetName', sheetName, vscode.ConfigurationTarget.Global);
-        await config.update('lastStartCell', startCell, vscode.ConfigurationTarget.Global);
-
-        return {
-            spreadsheetId,
-            sheetName,
-            startCell,
+    private async _promptForMissingConfig(
+        config: SqlSheetConfiguration,
+        defaultTableTitle: string = 'SQL Query Result'
+    ): Promise<SqlSheetConfiguration | undefined> {
+        let {
+            spreadsheet_id,
+            sheet_name,
+            start_cell,
+            name,
             transpose,
-            tableTitle: tableTitle || defaultTableTitle
-        };
+            data_only,
+        } = config;
+
+        if (!spreadsheet_id) {
+            spreadsheet_id = await vscode.window.showInputBox({
+                prompt: 'Enter the Google Sheets spreadsheet ID',
+                validateInput: value => value ? null : 'Spreadsheet ID is required'
+            });
+            if (spreadsheet_id === undefined) { return undefined; }
+        }
+
+        if (!sheet_name) {
+            sheet_name = await vscode.window.showInputBox({
+                prompt: 'Enter the sheet name or ID',
+                validateInput: value => value ? null : 'Sheet name or ID is required'
+            });
+            if (sheet_name === undefined) { return undefined; }
+        }
+
+        if (!start_cell) {
+            start_cell = await vscode.window.showInputBox({
+                prompt: 'Enter the start cell',
+                value: 'A1',
+                validateInput: value => value && /^[A-Za-z]+[0-9]+$/.test(value) ? null : 'Invalid cell reference'
+            });
+            if (start_cell === undefined) { return undefined; }
+        }
+
+        return new SqlSheetConfiguration(
+            spreadsheet_id,
+            sheet_name,
+            start_cell,
+            config.start_named_range,
+            name || defaultTableTitle,
+            config.table_name,
+            config.pre_file,
+            transpose,
+            data_only,
+            config.skip
+        );
     }
 }
 
