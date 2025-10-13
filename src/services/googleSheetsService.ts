@@ -300,7 +300,7 @@ export class GoogleSheetsService {
                 const hasTitleRow = titleText.length > 0;
                 const shouldTranspose = Boolean(options.transpose);
                 const executedAt = new Date();
-                const executedAtDisplay = executedAt.toLocaleString();
+                const executedAtValue = this.toSheetsDateTimeValue(executedAt);
                 let titleTimestampColumnIndex: number | undefined;
 
                 // Process the data
@@ -326,7 +326,7 @@ export class GoogleSheetsService {
                     const titleRow = Array(titleWidth).fill('');
                     titleRow[0] = titleText;
                     titleTimestampColumnIndex = titleWidth - 1;
-                    titleRow[titleTimestampColumnIndex] = executedAtDisplay;
+                    titleRow[titleTimestampColumnIndex] = executedAtValue;
 
                     outputChannel.appendLine(`Adding title row: ${JSON.stringify(titleRow)}`);
                     // Add title row without the empty row gap
@@ -597,6 +597,17 @@ export class GoogleSheetsService {
         }
 
         return transposed;
+    }
+
+    /**
+     * Convert a JavaScript Date to a Google Sheets serial date-time value
+     * @param date Date to convert
+     * @returns Serial date-time number compatible with Google Sheets
+     */
+    private toSheetsDateTimeValue(date: Date): number {
+        const msPerDay = 24 * 60 * 60 * 1000;
+        const excelEpoch = Date.UTC(1899, 11, 30, 0, 0, 0, 0);
+        return (date.getTime() - excelEpoch) / msPerDay;
     }
 
     /**
@@ -1106,10 +1117,14 @@ export class GoogleSheetsService {
                                 foregroundColor: { red: 0.6, green: 0.6, blue: 0.6 },
                                 bold: false
                             },
-                            horizontalAlignment: 'RIGHT'
+                            horizontalAlignment: 'RIGHT',
+                            numberFormat: {
+                                type: 'DATE_TIME',
+                                pattern: 'yyyy-mm-dd hh:mm'
+                            }
                         }
                     },
-                    fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)'
+                    fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,numberFormat)'
                 }
             });
         }
