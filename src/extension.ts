@@ -9,6 +9,8 @@ import { getSnowflakeService } from './services/snowflakeService';
 import { getGoogleSheetsService } from './services/googleSheetsService';
 import { SettingsWebviewProvider } from './views/SettingsWebviewProvider';
 import { getSqlSheetsExportViewModel } from './viewmodels/SqlSheetsExportViewModel';
+import { SqlFile } from './models/SqlFile';
+import { SqlQuery } from './models/SqlQuery';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -100,23 +102,67 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	// Register command for exporting query to Google Sheets
-	const exportQueryToSheetsCommand = vscode.commands.registerCommand('sql-sheets.exportQueryToSheets', async () => {
+	const exportQueryToSheetsCommand = vscode.commands.registerCommand('sql-sheets.exportQueryToSheets', async (queryArg?: SqlQuery) => {
+		const exportViewModel = getSqlSheetsExportViewModel();
+
+		if (queryArg) {
+			await exportViewModel.exportQueryToSheets(queryArg);
+			return;
+		}
+
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
 			vscode.window.showErrorMessage('No active editor found');
 			return;
 		}
 
-		// Get the entire document content
-		const sqlQuery = editor.document.getText();
-		const exportViewModel = getSqlSheetsExportViewModel();
-		await exportViewModel.exportQueryToSheets(sqlQuery);
+		const sqlFile = new SqlFile(editor.document);
+		const query = sqlFile.getQueryAt(editor.selection.active);
+
+		if (!query) {
+			vscode.window.showErrorMessage('No SQL query found at the current cursor position.');
+			return;
+		}
+
+		await exportViewModel.exportQueryToSheets(query);
 	});
 
 	// Register command for exporting SQL file to Google Sheets
 	const exportFileToSheetsCommand = vscode.commands.registerCommand('sql-sheets.exportFileToSheets', async () => {
-		const exportViewModel = getSqlSheetsExportViewModel();
-		await exportViewModel.exportActiveFileToSheets();
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			vscode.window.showErrorMessage('No active editor found');
+			return;
+		}
+
+		if (editor.document.languageId !== 'sql' && editor.document.languageId !== 'snowflake-sql') {
+			vscode.window.showErrorMessage('Active file is not an SQL file.');
+			return;
+		}
+
+		const sqlFile = new SqlFile(editor.document);
+		if (sqlFile.queries.length === 0) {
+			vscode.window.showInformationMessage('No SQL queries found in the active file.');
+			return;
+		}
+
+		await vscode.window.withProgress({
+			location: vscode.ProgressLocation.Notification,
+			title: 'Exporting SQL queries to Google Sheets...',
+			cancellable: false
+		}, async (progress) => {
+			for (let index = 0; index < sqlFile.queries.length; index++) {
+				const query = sqlFile.queries[index];
+				progress.report({ message: `Exporting query ${index + 1} of ${sqlFile.queries.length}...` });
+				try {
+					await vscode.commands.executeCommand('sql-sheets.exportQueryToSheets', query);
+				} catch (err) {
+					console.error(`Failed to export query ${index + 1}:`, err);
+				}
+			}
+		});
+
+		vscode.window.showInformationMessage('Finished exporting queries to Google Sheets.');
 	});
 
 
