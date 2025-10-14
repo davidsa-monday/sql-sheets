@@ -347,7 +347,7 @@ export class GoogleSheetsService {
                 } catch (err) {
                     logger.error(`Error verifying spreadsheet/sheet: ${err instanceof Error ? err.message : String(err)}`);
                 }
-                logger.revealOutput();
+                // logger.revealOutput();
 
                 if (!column || !row) {
                     if (!startCell) {
@@ -496,7 +496,7 @@ export class GoogleSheetsService {
                         }))
                     }
                 });
-                logger.revealOutput();
+                // logger.revealOutput();
 
                 // Clear existing content and formatting in the continuous range
                 try {
@@ -603,7 +603,7 @@ export class GoogleSheetsService {
                 logger.info(
                     `Successfully uploaded data to spreadsheet ${spreadsheetId}, sheet ${sheetName}, starting at ${resolvedStartCell}`
                 );
-                logger.revealOutput();
+                // logger.revealOutput();
 
                 let namedRangeCreated = false;
                 let namedRangeUpdated = false;

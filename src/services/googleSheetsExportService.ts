@@ -54,10 +54,10 @@ export class GoogleSheetsExportService {
         }
         if (typeof sheetIdentifier === 'string') {
             logger.info(`Using sheet name: "${sheetIdentifier}"`, { audience: ['developer'] });
-            logger.revealOutput();
+            // logger.revealOutput();
         } else {
             logger.info(`Using sheet ID: ${sheetIdentifier}`, { audience: ['developer'] });
-            logger.revealOutput();
+            // logger.revealOutput();
         }
 
         if (!cleanedStartCell && !cleanedStartNamedRange) {
@@ -84,7 +84,7 @@ export class GoogleSheetsExportService {
                 }
 
                 logger.info(`Using start cell: ${cleanedStartCell} (column: ${columnPart}, row: ${rowPart})`, { audience: ['developer'] });
-                logger.revealOutput();
+                // logger.revealOutput();
             } catch (err) {
                 throw new Error(`Invalid start cell format: ${err instanceof Error ? err.message : String(err)}`);
             }
@@ -92,7 +92,7 @@ export class GoogleSheetsExportService {
 
         if (cleanedStartNamedRange) {
             logger.info(`Using start named range: ${cleanedStartNamedRange}`, { audience: ['developer'] });
-            logger.revealOutput();
+            // logger.revealOutput();
         }
 
         try {
@@ -111,7 +111,7 @@ export class GoogleSheetsExportService {
 
             // Execute the query using the Snowflake service
             logger.info('Executing query in Snowflake...', { audience: ['developer'] });
-            logger.revealOutput();
+            // logger.revealOutput();
             const results = await snowflakeService.executeQuery(sqlQuery);
             logger.info('Query executed successfully.', { audience: ['developer'] });
 
