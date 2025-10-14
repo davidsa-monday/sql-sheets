@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import { SqlSheetConfiguration } from "./SqlSheetConfiguration";
 
 export class SqlQuery {
@@ -5,6 +6,7 @@ export class SqlQuery {
         public readonly config: SqlSheetConfiguration,
         public readonly queryText: string,
         public readonly startOffset: number,
-        public readonly endOffset: number
+        public readonly endOffset: number,
+        public readonly documentUri: vscode.Uri,
     ) { }
 }

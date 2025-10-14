@@ -8,7 +8,7 @@ import { SqlSheetEditorProvider } from './views/SqlSheetEditorProvider';
 import { getSnowflakeService } from './services/snowflakeService';
 import { getGoogleSheetsService } from './services/googleSheetsService';
 import { SettingsWebviewProvider } from './views/SettingsWebviewProvider';
-import { ExportResult, getSqlSheetsExportViewModel } from './viewmodels/SqlSheetsExportViewModel';
+import { ExportResult, ExportOptions, getSqlSheetsExportViewModel, SqlSheetsExportViewModel } from './viewmodels/SqlSheetsExportViewModel';
 import { SqlFile } from './models/SqlFile';
 import { SqlQuery } from './models/SqlQuery';
 import { getLogger } from './services/loggingService';
@@ -102,12 +102,31 @@ export function activate(context: vscode.ExtensionContext) {
 		SettingsWebviewProvider.createOrShow(context.extensionUri);
 	});
 
+	const runSingleQueryExport = async (
+		exportViewModel: SqlSheetsExportViewModel,
+		query: SqlQuery,
+		options?: ExportOptions
+	): Promise<ExportResult> => {
+		const result = await exportViewModel.exportQueryToSheets(query, options);
+		switch (result) {
+			case ExportResult.SkippedMissingConfig:
+				vscode.window.showWarningMessage('Please add spreadsheet_id, a sheet ID or sheet name, and a start cell or named range before exporting.');
+				break;
+			case ExportResult.ExecutedCreate:
+				vscode.window.showInformationMessage('Executed CREATE statement in Snowflake.');
+				break;
+			default:
+				break;
+		}
+		return result;
+	};
+
 	// Register command for exporting query to Google Sheets
 	const exportQueryToSheetsCommand = vscode.commands.registerCommand('sql-sheets.exportQueryToSheets', async (queryArg?: SqlQuery) => {
 		const exportViewModel = getSqlSheetsExportViewModel();
 
 		if (queryArg) {
-			return exportViewModel.exportQueryToSheets(queryArg);
+			return runSingleQueryExport(exportViewModel, queryArg);
 		}
 
 		const editor = vscode.window.activeTextEditor;
@@ -124,21 +143,32 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		const result = await exportViewModel.exportQueryToSheets(query);
-		switch (result) {
-			case ExportResult.Exported:
-				return result;
-			case ExportResult.SkippedMissingConfig:
-				vscode.window.showWarningMessage('Please add spreadsheet_id, a sheet ID or sheet name, and a start cell or named range before exporting.');
-				return result;
-			case ExportResult.UserCancelled:
-				return result;
-			case ExportResult.ExecutedCreate:
-				vscode.window.showInformationMessage('Executed CREATE statement in Snowflake.');
-				return result;
-			default:
-				return result;
+		return runSingleQueryExport(exportViewModel, query);
+	});
+
+	const exportQueryToSheetsWithDepsCommand = vscode.commands.registerCommand('sql-sheets.exportQueryToSheetsWithDeps', async (queryArg?: SqlQuery) => {
+		const exportViewModel = getSqlSheetsExportViewModel();
+		const executedPreFiles = new Set<string>();
+
+		if (queryArg) {
+			return runSingleQueryExport(exportViewModel, queryArg, { executeDependencies: true, executedPreFiles });
 		}
+
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			vscode.window.showErrorMessage('No active editor found');
+			return;
+		}
+
+		const sqlFile = new SqlFile(editor.document);
+		const query = sqlFile.getQueryAt(editor.selection.active);
+
+		if (!query) {
+			vscode.window.showErrorMessage('No SQL query found at the current cursor position.');
+			return;
+		}
+
+		return runSingleQueryExport(exportViewModel, query, { executeDependencies: true, executedPreFiles });
 	});
 
 	// Register command for exporting SQL file to Google Sheets
@@ -160,6 +190,7 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
+		const exportViewModel = getSqlSheetsExportViewModel();
 		let skippedMissingConfigCount = 0;
 		let cancelledCount = 0;
 		let executedCreateCount = 0;
@@ -173,10 +204,7 @@ export function activate(context: vscode.ExtensionContext) {
 				const query = sqlFile.queries[index];
 				progress.report({ message: `Exporting query ${index + 1} of ${sqlFile.queries.length}...` });
 				try {
-					const result = await vscode.commands.executeCommand<ExportResult>('sql-sheets.exportQueryToSheets', query);
-					if (!result) {
-						continue;
-					}
+					const result = await exportViewModel.exportQueryToSheets(query);
 					switch (result) {
 						case ExportResult.SkippedMissingConfig:
 							skippedMissingConfigCount++;
@@ -211,6 +239,80 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.showInformationMessage(`Finished exporting queries to Google Sheets${summarySuffix}.`);
 	});
 
+	const exportFileToSheetsWithDepsCommand = vscode.commands.registerCommand('sql-sheets.exportFileToSheetsWithDeps', async () => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			vscode.window.showErrorMessage('No active editor found');
+			return;
+		}
+
+		if (editor.document.languageId !== 'sql' && editor.document.languageId !== 'snowflake-sql') {
+			vscode.window.showErrorMessage('Active file is not an SQL file.');
+			return;
+		}
+
+		const sqlFile = new SqlFile(editor.document);
+		if (sqlFile.queries.length === 0) {
+			vscode.window.showInformationMessage('No SQL queries found in the active file.');
+			return;
+		}
+
+		const exportViewModel = getSqlSheetsExportViewModel();
+		const executedPreFiles = new Set<string>();
+		let skippedMissingConfigCount = 0;
+		let cancelledCount = 0;
+		let executedCreateCount = 0;
+
+		await vscode.window.withProgress({
+			location: vscode.ProgressLocation.Notification,
+			title: 'Exporting SQL queries with dependencies...',
+			cancellable: false
+		}, async (progress) => {
+			for (let index = 0; index < sqlFile.queries.length; index++) {
+				const query = sqlFile.queries[index];
+				progress.report({ message: `Exporting query ${index + 1} of ${sqlFile.queries.length}...` });
+				try {
+					const result = await exportViewModel.exportQueryToSheets(query, {
+						executeDependencies: true,
+						executedPreFiles
+					});
+					switch (result) {
+						case ExportResult.SkippedMissingConfig:
+							skippedMissingConfigCount++;
+							break;
+						case ExportResult.UserCancelled:
+							cancelledCount++;
+							break;
+						case ExportResult.ExecutedCreate:
+							executedCreateCount++;
+							break;
+						default:
+							break;
+					}
+				} catch (err) {
+					logger.error(`Failed to export query ${index + 1}`, { data: err });
+				}
+			}
+		});
+
+		const summaryMessages: string[] = [];
+		if (skippedMissingConfigCount > 0) {
+			summaryMessages.push(`${skippedMissingConfigCount} skipped (missing configuration)`);
+		}
+		if (cancelledCount > 0) {
+			summaryMessages.push(`${cancelledCount} cancelled by user`);
+		}
+		if (executedCreateCount > 0) {
+			summaryMessages.push(`${executedCreateCount} CREATE statements executed`);
+		}
+		if (executedPreFiles.size > 0) {
+			summaryMessages.push(`${executedPreFiles.size} pre-files executed`);
+		}
+
+		const summarySuffix = summaryMessages.length > 0 ? ` (${summaryMessages.join(', ')})` : '';
+		vscode.window.showInformationMessage(`Finished exporting queries to Google Sheets${summarySuffix}.`);
+	});
+
 
 
 	// Register all commands
@@ -218,7 +320,9 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(executeQueryCommand);
 	context.subscriptions.push(showSettingsCommand);
 	context.subscriptions.push(exportQueryToSheetsCommand);
+	context.subscriptions.push(exportQueryToSheetsWithDepsCommand);
 	context.subscriptions.push(exportFileToSheetsCommand);
+	context.subscriptions.push(exportFileToSheetsWithDepsCommand);
 
 
 	// Register view provider

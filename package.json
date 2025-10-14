@@ -60,8 +60,18 @@
         "icon": "$(export)"
       },
       {
+        "command": "sql-sheets.exportQueryToSheetsWithDeps",
+        "title": "sql-sheets: Export SQL Query to Google Sheets (with pre_file)",
+        "icon": "$(extensions)"
+      },
+      {
         "command": "sql-sheets.exportFileToSheets",
         "title": "sql-sheets: Export SQL File to Google Sheets",
+        "icon": "$(file-symlink-file)"
+      },
+      {
+        "command": "sql-sheets.exportFileToSheetsWithDeps",
+        "title": "sql-sheets: Export SQL File to Google Sheets (with pre_file)",
         "icon": "$(file-symlink-file)"
       }
     ],

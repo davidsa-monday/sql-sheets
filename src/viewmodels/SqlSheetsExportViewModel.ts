@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { createHash } from 'crypto';
+import * as path from 'path';
+import { promises as fs } from 'fs';
 import { getGoogleSheetsExportService } from '../services/googleSheetsExportService';
 import { getSnowflakeService } from '../services/snowflakeService';
 import { SqlQuery } from '../models/SqlQuery';
@@ -15,6 +17,11 @@ export enum ExportResult {
     ExecutedCreate = 'executed_create'
 }
 
+export interface ExportOptions {
+    executeDependencies?: boolean;
+    executedPreFiles?: Set<string>;
+}
+
 const logger = getLogger();
 
 /**
@@ -27,6 +34,7 @@ export class SqlSheetsExportViewModel {
      */
     public async exportQueryToSheets(
         sqlQuery: SqlQuery,
+        options: ExportOptions = {}
     ): Promise<ExportResult> {
         try {
             if (!sqlQuery) {
@@ -37,6 +45,9 @@ export class SqlSheetsExportViewModel {
                 logger.info('Skipping query export because the configuration is marked to skip.');
                 return ExportResult.SkippedMissingConfig;
             }
+
+            const executeDependencies = options.executeDependencies ?? false;
+            const executedPreFiles = options.executedPreFiles ?? new Set<string>();
 
             const hasRequiredConfig = this._hasRequiredConfig(sqlQuery.config);
             const isCreateStatement = this._isCreateStatement(sqlQuery.queryText);
@@ -52,6 +63,19 @@ export class SqlSheetsExportViewModel {
                     { audience: ['support'] }
                 );
                 return ExportResult.SkippedMissingConfig;
+            }
+
+            if (executeDependencies && sqlQuery.config.pre_file) {
+                const resolvedPreFile = this._resolvePreFilePath(sqlQuery, sqlQuery.config.pre_file);
+                if (!resolvedPreFile) {
+                    vscode.window.showErrorMessage(`Unable to resolve pre_file path: ${sqlQuery.config.pre_file}`);
+                    return ExportResult.UserCancelled;
+                }
+
+                if (!executedPreFiles.has(resolvedPreFile)) {
+                    await this._executePreFile(resolvedPreFile);
+                    executedPreFiles.add(resolvedPreFile);
+                }
             }
 
             const completedConfig = await this._promptForMissingConfig(
@@ -283,15 +307,16 @@ export class SqlSheetsExportViewModel {
             query.config.start_cell
         );
 
-        const editor = vscode.window.activeTextEditor;
-        if (!editor || (editor.document.languageId !== 'sql' && editor.document.languageId !== 'snowflake-sql')) {
+        const document = await vscode.workspace.openTextDocument(query.documentUri);
+        const sqlFile = new SqlFile(document);
+        const matchingQuery = sqlFile.queries.find(q => q.startOffset === query.startOffset && q.endOffset === query.endOffset);
+        if (!matchingQuery) {
+            logger.warn('Failed to locate matching query for parameter update.', { audience: ['developer'] });
             return;
         }
 
-        const sqlFile = new SqlFile(editor.document);
-
         if (newCombinedValue !== existingCombinedValue) {
-            await sqlFile.updateParameter(query, 'start_cell', newCombinedValue);
+            await sqlFile.updateParameter(matchingQuery, 'start_cell', newCombinedValue);
             logger.info(`Updated start_cell parameter to "${newCombinedValue}" in SQL file.`, { audience: ['developer'] });
         }
 
@@ -305,9 +330,66 @@ export class SqlSheetsExportViewModel {
         );
 
         if (newSheetParameter !== existingSheetParameter && newSheetParameter.length > 0) {
-            await sqlFile.updateParameter(query, 'sheet_name', newSheetParameter);
+            await sqlFile.updateParameter(matchingQuery, 'sheet_name', newSheetParameter);
             logger.info(`Updated sheet_name parameter to "${newSheetParameter}" in SQL file.`, { audience: ['developer'] });
         }
+    }
+
+    private _resolvePreFilePath(query: SqlQuery, preFile: string): string | undefined {
+        try {
+            if (!preFile || preFile.trim().length === 0) {
+                return undefined;
+            }
+
+            const queryFilePath = query.documentUri.fsPath;
+            if (!queryFilePath) {
+                return undefined;
+            }
+
+            if (path.isAbsolute(preFile)) {
+                return path.normalize(preFile);
+            }
+
+            return path.normalize(path.resolve(path.dirname(queryFilePath), preFile));
+        } catch (err) {
+            logger.warn('Failed to resolve pre_file path', { data: err });
+            return undefined;
+        }
+    }
+
+    private async _executePreFile(filePath: string): Promise<void> {
+        try {
+            await fs.access(filePath);
+        } catch {
+            throw new Error(`pre_file not found: ${filePath}`);
+        }
+
+        let fileContents: string;
+        try {
+            fileContents = await fs.readFile(filePath, 'utf-8');
+        } catch (err) {
+            throw new Error(`Failed to read pre_file ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+
+        if (fileContents.trim().length === 0) {
+            logger.info(`Pre-file ${filePath} is empty. Skipping execution.`, { audience: ['developer'] });
+            return;
+        }
+
+        const snowflakeService = getSnowflakeService();
+        if (!snowflakeService.isConfigured()) {
+            throw new Error('Snowflake connection is not configured. Cannot execute pre_file.');
+        }
+
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `Executing pre-file: ${path.basename(filePath)}`,
+            cancellable: false
+        }, async () => {
+            logger.info(`Executing pre_file ${filePath}`, { audience: ['developer'] });
+            await snowflakeService.executeQuery(fileContents);
+            logger.info(`Completed pre_file ${filePath}`, { audience: ['developer'] });
+        });
     }
 }
 

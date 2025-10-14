@@ -120,7 +120,7 @@ export class SqlFile {
                 SqlSheetConfiguration.stringToBoolean(params['skip'])
             );
 
-            this._queries.push(new SqlQuery(config, queryText, startOffset, endOffset));
+            this._queries.push(new SqlQuery(config, queryText, startOffset, endOffset, this.document.uri));
             currentOffset = endOffset;
         }
     }

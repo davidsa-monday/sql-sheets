@@ -77,6 +77,15 @@ The following parameters are supported:
 - `skip`: Set to "true" to skip processing this query
 - `pre_file`: Path to a SQL file that should be executed before this query
 
+### Commands
+
+- `sql-sheets: Export SQL Query to Google Sheets`
+- `sql-sheets: Export SQL Query to Google Sheets (with pre_file)`
+- `sql-sheets: Export SQL File to Google Sheets`
+- `sql-sheets: Export SQL File to Google Sheets (with pre_file)`
+
+When you use the “with pre_file” commands, each query’s `--pre_file` is resolved relative to the SQL file and executed once per export run before the main query. The results are cached so shared pre-files only run a single time per export.
+
 Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
 
 For example:
