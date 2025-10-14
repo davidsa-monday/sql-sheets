@@ -73,6 +73,7 @@ export class SqlFile {
     private parse(): void {
         this._queries = [];
         const text = this.document.getText();
+        const defaultParams = this.extractDefaultParameters(text);
         const queryBlocks = text.split(';').filter(b => b.trim().length > 0);
 
         let currentOffset = 0;
@@ -83,7 +84,7 @@ export class SqlFile {
 
             const regex = /--(\w+):[\t ]*(.*)/g;
             let match;
-            const params: { [key: string]: string } = {};
+            const params: { [key: string]: string } = { ...defaultParams };
             let queryText = block;
 
             while ((match = regex.exec(block)) !== null) {
@@ -141,5 +142,32 @@ export class SqlFile {
             this._queries.push(new SqlQuery(config, queryText, startOffset, endOffset, this.document.uri));
             currentOffset = endOffset;
         }
+    }
+
+    private extractDefaultParameters(text: string): Record<string, string> {
+        const defaults: Record<string, string> = {};
+        const lines = text.split(/\r?\n/);
+
+        for (const line of lines) {
+            const trimmedLine = line.trim();
+
+            if (trimmedLine.length === 0) {
+                continue;
+            }
+
+            const parameterMatch = /^--(\w+):[\t ]*(.*)$/.exec(trimmedLine);
+            if (parameterMatch) {
+                defaults[parameterMatch[1]] = parameterMatch[2].trim();
+                continue;
+            }
+
+            if (trimmedLine.startsWith('--')) {
+                continue;
+            }
+
+            break;
+        }
+
+        return defaults;
     }
 }
