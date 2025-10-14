@@ -1384,9 +1384,10 @@ export class GoogleSheetsService {
                             left: { style: "NONE" },
                             right: { style: "NONE" },
                         }
-                    }
+                    },
+                    note: null
                 },
-                fields: "userEnteredFormat(textFormat,backgroundColor,borders)"
+                fields: "userEnteredFormat(textFormat,backgroundColor,borders),note"
             }
         };
     }
@@ -1415,6 +1416,10 @@ export class GoogleSheetsService {
         const numCols = newData.length > 0 ? newData[0].length : 0;
         logger.info(`New data dimensions: ${numDataRows} rows x ${numCols} columns`);
 
+        const startColIndex = this.columnToIndex(startColumn);
+        const startRowIndex = Math.max(startRow - 1, 0);
+        let rangePrefix = '';
+
         try {
             // Get the sheet name for the range
             const sheetMetadata = await sheets.spreadsheets.get({
@@ -1433,7 +1438,6 @@ export class GoogleSheetsService {
             logger.info(`Working with sheet: "${sheetTitle}" (ID: ${sheetId})`);
 
             // Properly format the sheet name for A1 notation
-            let rangePrefix: string;
             if (/[^a-zA-Z0-9_]/.test(sheetTitle) || /^\d/.test(sheetTitle)) {
                 rangePrefix = `'${sheetTitle.replace(/'/g, "''")}'`;
             } else {
@@ -1451,49 +1455,76 @@ export class GoogleSheetsService {
 
             // Extract the values from the response
             const allValues = response.data.values || [];
-            const maxRow = allValues.length;
-            const maxCol = Math.max(...allValues.map(row => row.length), 0);
-            logger.info(`Fetched ${maxRow} rows and max width of ${maxCol} columns from the sheet`);
+            const fetchedRowCount = allValues.length;
+            const fetchedColCount = allValues.reduce((maxWidth, row) => Math.max(maxWidth, row.length), 0);
+            logger.info(`Fetched ${fetchedRowCount} rows and max width of ${fetchedColCount} columns from the sheet`);
 
-            // Convert start column letter to index (0-based)
-            const startColIndex = this.columnToIndex(startColumn);
             logger.info(`Start column "${startColumn}" converted to 0-based index: ${startColIndex}`);
 
-            // If the sheet is empty or we're starting beyond existing data
-            if (maxRow === 0) {
-                logger.info("Sheet appears to be empty, no need to clear anything");
-                return;
-            }
+            let contiguousHeight = 0;
+            let contiguousWidth = 0;
 
-            // Find the last non-empty row
-            let lastDataRow = 0;
-            for (let r = 0; r < allValues.length; r++) {
-                const row = allValues[r];
-                // Check if the row has any non-empty cells
-                if (row && row.some(cell => cell !== undefined && cell !== null && cell !== "")) {
-                    lastDataRow = r;
+            if (fetchedRowCount === 0) {
+                logger.info('Sheet appears to be empty from the specified start row; will fall back to new data footprint.');
+            } else {
+                // Determine how many rows from the start are populated without gaps
+                for (let rowOffset = 0; rowOffset < fetchedRowCount; rowOffset++) {
+                    const row = allValues[rowOffset] || [];
+                    const rowHasValue = row.some(value => value !== undefined && value !== null && value !== '');
+                    if (!rowHasValue) {
+                        break;
+                    }
+                    contiguousHeight = rowOffset + 1;
                 }
-            }
-            lastDataRow++; // Convert to 1-based row number
 
-            // Find the last non-empty column
-            let lastDataCol = 0;
-            for (let r = 0; r < allValues.length; r++) {
-                const row = allValues[r] || [];
-                for (let c = 0; c < row.length; c++) {
-                    if (row[c] !== undefined && row[c] !== null && row[c] !== "") {
-                        lastDataCol = Math.max(lastDataCol, c);
+                if (contiguousHeight === 0) {
+                    logger.info('No populated rows detected from the start cell; will clear based on new data footprint.');
+                } else {
+                    const rowsToInspect = contiguousHeight;
+                    const scanEndExclusive = startColIndex + Math.max(fetchedColCount, numCols, 1);
+
+                    for (let colIndex = startColIndex; colIndex < scanEndExclusive; colIndex++) {
+                        const columnOffset = colIndex - startColIndex;
+                        let colHasValue = false;
+
+                        for (let rowOffset = 0; rowOffset < rowsToInspect; rowOffset++) {
+                            const row = allValues[rowOffset] || [];
+                            const cellValue = columnOffset < row.length ? row[columnOffset] : '';
+                            if (cellValue !== undefined && cellValue !== null && cellValue !== '') {
+                                colHasValue = true;
+                                break;
+                            }
+                        }
+
+                        if (!colHasValue) {
+                            break;
+                        }
+
+                        contiguousWidth = columnOffset + 1;
                     }
                 }
             }
-            lastDataCol++; // Convert to 1-based column index
 
-            // Calculate the full range to clear
-            const clearEndRow = Math.max(startRow + lastDataRow, startRow + numDataRows);
-            const clearEndColIndex = Math.max(startColIndex + lastDataCol, startColIndex + numCols);
-            const clearEndColLetter = this.indexToColumn(clearEndColIndex);
+            const contiguousLastRowIndex = contiguousHeight > 0 ? startRowIndex + contiguousHeight - 1 : startRowIndex - 1;
+            const contiguousLastColIndex = contiguousWidth > 0 ? startColIndex + contiguousWidth - 1 : startColIndex - 1;
 
-            logger.info(`Determined data ranges: last data row=${lastDataRow}, last data col=${lastDataCol}`);
+            const outputLastRowIndex = numDataRows > 0 ? startRowIndex + numDataRows - 1 : startRowIndex;
+            const outputLastColIndex = numCols > 0 ? startColIndex + numCols - 1 : startColIndex;
+
+            const clearLastRowIndex = Math.max(contiguousLastRowIndex, outputLastRowIndex);
+            const clearLastColIndex = Math.max(contiguousLastColIndex, outputLastColIndex);
+
+            const clearEndRow = clearLastRowIndex + 1;
+            const clearEndColLetter = this.indexToColumn(clearLastColIndex);
+
+            if (contiguousHeight > 0 && contiguousWidth > 0) {
+                const contiguousEndRow = startRow + contiguousHeight - 1;
+                const contiguousEndColLetter = this.indexToColumn(startColIndex + contiguousWidth - 1);
+                logger.info(`Contiguous data ends at row ${contiguousEndRow}, column ${contiguousEndColLetter}.`);
+            } else {
+                logger.info('No contiguous existing data detected beyond the start cell.');
+            }
+
             logger.info(`Clearing range from ${startColumn}${startRow} to ${clearEndColLetter}${clearEndRow}`);
 
             // Create the A1 range notation
@@ -1517,7 +1548,7 @@ export class GoogleSheetsService {
                             startRow,
                             startColIndex + 1, // Convert to 1-based for the function
                             clearEndRow,
-                            clearEndColIndex + 1 // Convert to 1-based for the function
+                            clearLastColIndex + 1 // Convert to 1-based for the function
                         )
                     ]
                 }
@@ -1535,12 +1566,13 @@ export class GoogleSheetsService {
             try {
                 logger.info(`Attempting fallback clearing method...`);
                 // Calculate the end position based on the new data dimensions
-                const endRow = startRow + numDataRows - 1;
-                const endColIndex = this.columnToIndex(startColumn) + numCols;
-                const endColumnLetter = this.indexToColumn(endColIndex);
+                const fallbackLastRowIndex = numDataRows > 0 ? startRowIndex + numDataRows - 1 : startRowIndex;
+                const fallbackLastColIndex = numCols > 0 ? startColIndex + numCols - 1 : startColIndex;
+                const fallbackEndRow = fallbackLastRowIndex + 1;
+                const fallbackEndColumnLetter = this.indexToColumn(fallbackLastColIndex);
 
                 // Define the fallback range in A1 notation
-                const fallbackRange = `${startColumn}${startRow}:${endColumnLetter}${endRow}`;
+                const fallbackRange = `${rangePrefix}!${startColumn}${startRow}:${fallbackEndColumnLetter}${fallbackEndRow}`;
                 logger.info(`Fallback range: ${fallbackRange}`);
 
                 // Clear the values
@@ -1557,9 +1589,9 @@ export class GoogleSheetsService {
                             this.createClearFormatsRequest(
                                 sheetId,
                                 startRow,
-                                this.columnToIndex(startColumn) + 1,
-                                endRow,
-                                endColIndex + 1
+                                startColIndex + 1,
+                                fallbackEndRow,
+                                fallbackLastColIndex + 1
                             )
                         ]
                     }
