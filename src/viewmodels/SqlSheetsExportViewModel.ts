@@ -210,14 +210,45 @@ export class SqlSheetsExportViewModel {
     }
 
     private _isCreateStatement(queryText: string): boolean {
-        const strippedQuery = queryText
-            .replace(/\/\*[\s\S]*?\*\//g, '') // Remove block comments
+        const sanitizedLines = queryText
+            .replace(/\/\*[\s\S]*?\*\//g, '')
             .split('\n')
             .map(line => line.trim())
-            .filter(line => line.length > 0 && !line.startsWith('--'))
-            .join(' ');
+            .filter(line => line.length > 0 && !line.startsWith('--'));
 
-        return /^create\b/i.test(strippedQuery);
+        for (const line of sanitizedLines) {
+            if (this._isIgnorableLeadingStatement(line)) {
+                continue;
+            }
+
+            if (/^create\b/i.test(line)) {
+                return true;
+            }
+
+            break;
+        }
+
+        const flattened = sanitizedLines.join(' ');
+        const createMatch = /\bcreate\b/i.exec(flattened);
+        if (!createMatch) {
+            return false;
+        }
+
+        const textBeforeCreate = flattened.slice(0, createMatch.index).toLowerCase();
+        if (textBeforeCreate.trim().length === 0) {
+            return true;
+        }
+
+        const disallowedLeadingKeywords = /\b(select|insert|update|delete|merge|copy|call|with|begin|explain)\b/;
+        if (disallowedLeadingKeywords.test(textBeforeCreate)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private _isIgnorableLeadingStatement(line: string): boolean {
+        return /^(?:use|set|alter\s+(?:session|warehouse|database|schema|user)|show|describe)\b/i.test(line);
     }
 
     private async _executeCreateStatement(queryText: string): Promise<void> {

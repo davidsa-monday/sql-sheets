@@ -90,9 +90,27 @@ export class SqlFile {
                 params[match[1]] = match[2].trim();
             }
 
-            const firstSelect = block.toLowerCase().indexOf('select');
-            if (firstSelect !== -1) {
-                queryText = block.substring(firstSelect);
+            if (queryText.length > 0) {
+                const lines = queryText.split('\n');
+                let firstStatementLine = 0;
+
+                while (firstStatementLine < lines.length) {
+                    const trimmedLine = lines[firstStatementLine].trim();
+
+                    if (trimmedLine.length === 0) {
+                        firstStatementLine++;
+                        continue;
+                    }
+
+                    if (/^--\w+:/.test(trimmedLine)) {
+                        firstStatementLine++;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                queryText = lines.slice(firstStatementLine).join('\n');
             }
 
             const combinedSheetParameter = SqlSheetConfiguration.parseSheetNameParameter(params['sheet_name']);
