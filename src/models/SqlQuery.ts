@@ -8,5 +8,6 @@ export class SqlQuery {
         public readonly startOffset: number,
         public readonly endOffset: number,
         public readonly documentUri: vscode.Uri,
+        public readonly parameterSources: Record<string, 'default' | 'query'>,
     ) { }
 }

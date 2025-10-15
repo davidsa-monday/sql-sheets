@@ -4,6 +4,7 @@ import { SqlSheetConfiguration } from './SqlSheetConfiguration';
 
 export class SqlFile {
     private _queries: SqlQuery[] = [];
+    private defaultParameterRanges: Record<string, { start: number; end: number }> = {};
 
     constructor(public readonly document: vscode.TextDocument) {
         this.parse();
@@ -47,6 +48,21 @@ export class SqlFile {
             );
             edit.replace(this.document.uri, range, `--${key}: ${value}`);
         } else {
+            const source = query.parameterSources?.[key];
+            const defaultRangeOffsets = source === 'default' ? this.defaultParameterRanges[key] : undefined;
+
+            if (defaultRangeOffsets) {
+                const range = new vscode.Range(
+                    this.document.positionAt(defaultRangeOffsets.start),
+                    this.document.positionAt(defaultRangeOffsets.end)
+                );
+                const replacementText = `--${key}: ${value}`;
+                edit.replace(this.document.uri, range, replacementText);
+                await vscode.workspace.applyEdit(edit);
+                this.parse();
+                return;
+            }
+
             // Parameter doesn't exist, add it to the beginning of the query block
             // Find where to insert the new parameter (before the first non-comment line)
             const lines = queryText.split('\n');
@@ -68,12 +84,15 @@ export class SqlFile {
         }
 
         await vscode.workspace.applyEdit(edit);
+        this.parse();
     }
 
     private parse(): void {
         this._queries = [];
         const text = this.document.getText();
-        const defaultParams = this.extractDefaultParameters(text);
+        const defaultParameters = this.extractDefaultParameters(text);
+        const defaultParams = defaultParameters.values;
+        this.defaultParameterRanges = defaultParameters.ranges;
         const queryBlocks = text.split(';').filter(b => b.trim().length > 0);
 
         let currentOffset = 0;
@@ -85,10 +104,16 @@ export class SqlFile {
             const regex = /--(\w+):[\t ]*(.*)/g;
             let match;
             const params: { [key: string]: string } = { ...defaultParams };
+            const parameterSources: Record<string, 'default' | 'query'> = {};
+
+            for (const key of Object.keys(defaultParams)) {
+                parameterSources[key] = 'default';
+            }
             let queryText = block;
 
             while ((match = regex.exec(block)) !== null) {
                 params[match[1]] = match[2].trim();
+                parameterSources[match[1]] = 'query';
             }
 
             if (queryText.length > 0) {
@@ -139,17 +164,25 @@ export class SqlFile {
                 SqlSheetConfiguration.stringToBoolean(params['skip'])
             );
 
-            this._queries.push(new SqlQuery(config, queryText, startOffset, endOffset, this.document.uri));
+            this._queries.push(new SqlQuery(config, queryText, startOffset, endOffset, this.document.uri, parameterSources));
             currentOffset = endOffset;
         }
     }
 
-    private extractDefaultParameters(text: string): Record<string, string> {
+    private extractDefaultParameters(text: string): {
+        values: Record<string, string>;
+        ranges: Record<string, { start: number; end: number }>;
+    } {
         const defaults: Record<string, string> = {};
-        const lines = text.split(/\r?\n/);
+        const ranges: Record<string, { start: number; end: number }> = {};
+        const lineRegex = /^.*(?:\r?\n|$)/gm;
+        let match: RegExpExecArray | null;
 
-        for (const line of lines) {
-            const trimmedLine = line.trim();
+        while ((match = lineRegex.exec(text)) !== null) {
+            const lineWithEol = match[0];
+            const lineStart = match.index;
+            const lineContent = lineWithEol.replace(/\r?\n$/, '');
+            const trimmedLine = lineContent.trim();
 
             if (trimmedLine.length === 0) {
                 continue;
@@ -157,7 +190,13 @@ export class SqlFile {
 
             const parameterMatch = /^--(\w+):[\t ]*(.*)$/.exec(trimmedLine);
             if (parameterMatch) {
-                defaults[parameterMatch[1]] = parameterMatch[2].trim();
+                const key = parameterMatch[1];
+                const value = parameterMatch[2].trim();
+                defaults[key] = value;
+                ranges[key] = {
+                    start: lineStart,
+                    end: lineStart + lineContent.length
+                };
                 continue;
             }
 
@@ -168,6 +207,6 @@ export class SqlFile {
             break;
         }
 
-        return defaults;
+        return { values: defaults, ranges };
     }
 }
