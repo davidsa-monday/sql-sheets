@@ -77,6 +77,8 @@ The following parameters are supported:
 - `skip`: Set to "true" to skip processing this query
 - `pre_file`: One or more SQL files (workspace-relative or absolute) to execute before the query. Repeat the parameter on separate lines to run multiple dependencies; entries aren’t inherited between queries.
 
+Top-of-file parameter defaults apply to every query except for `start_cell`, `name`, and `table_name`, which must be set on a per-query basis if needed.
+
 ### Commands
 
 - `sql-sheets: Export SQL Query to Google Sheets`

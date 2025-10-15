@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import { SqlQuery } from './SqlQuery';
 import { SqlSheetConfiguration } from './SqlSheetConfiguration';
 
+const NON_INHERITABLE_DEFAULTS = new Set(['start_cell', 'name', 'table_name']);
+
 export class SqlFile {
     private _queries: SqlQuery[] = [];
     private defaultParameterRanges: Record<string, { start: number; end: number }> = {};
@@ -211,6 +213,10 @@ export class SqlFile {
                 const value = parameterMatch[2].trim();
                 if (key === 'pre_file') {
                     preFiles.push(value);
+                    continue;
+                }
+
+                if (NON_INHERITABLE_DEFAULTS.has(key)) {
                     continue;
                 }
 
