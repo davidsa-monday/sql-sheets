@@ -75,7 +75,7 @@ The following parameters are supported:
 - `name`: A title for the table
 - `data_only`: Set to "true" to output only data without headers
 - `skip`: Set to "true" to skip processing this query
-- `pre_file`: Path to a SQL file that should be executed before this query
+- `pre_file`: Path (workspace-relative or absolute) to a SQL file that should be executed before this query
 
 ### Commands
 
@@ -84,7 +84,7 @@ The following parameters are supported:
 - `sql-sheets: Export SQL File to Google Sheets`
 - `sql-sheets: Export SQL File to Google Sheets (with pre_file)`
 
-When you use the “with pre_file” commands, each query’s `--pre_file` is resolved relative to the SQL file and executed once per export run before the main query. The results are cached so shared pre-files only run a single time per export.
+When you use the “with pre_file” commands, each query’s `--pre_file` is resolved against the workspace folder (falling back to the SQL file directory if no workspace is open) and executed once per export run before the main query. The results are cached so shared pre-files only run a single time per export.
 
 Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
 

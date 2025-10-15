@@ -372,16 +372,25 @@ export class SqlSheetsExportViewModel {
                 return undefined;
             }
 
+            const trimmedPreFile = preFile.trim();
+
+            if (path.isAbsolute(trimmedPreFile)) {
+                return path.normalize(trimmedPreFile);
+            }
+
+            const workspaceFolder = vscode.workspace.getWorkspaceFolder(query.documentUri)
+                ?? vscode.workspace.workspaceFolders?.[0];
+
+            if (workspaceFolder) {
+                return path.normalize(path.resolve(workspaceFolder.uri.fsPath, trimmedPreFile));
+            }
+
             const queryFilePath = query.documentUri.fsPath;
             if (!queryFilePath) {
                 return undefined;
             }
 
-            if (path.isAbsolute(preFile)) {
-                return path.normalize(preFile);
-            }
-
-            return path.normalize(path.resolve(path.dirname(queryFilePath), preFile));
+            return path.normalize(path.resolve(path.dirname(queryFilePath), trimmedPreFile));
         } catch (err) {
             logger.warn('Failed to resolve pre_file path', { data: err });
             return undefined;
