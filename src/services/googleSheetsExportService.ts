@@ -287,8 +287,8 @@ export function registerExportQueryToSheetCommand(context: vscode.ExtensionConte
                 resolvedStartCell,
                 resolvedStartNamedRange,
                 tableTitle,
-                undefined, // name_t
-                undefined, // pre_file
+                undefined, // table_name
+                undefined, // pre_files
                 transpose,
                 dataOnly,
                 false // skip

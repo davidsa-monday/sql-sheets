@@ -259,6 +259,13 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const exportViewModel = getSqlSheetsExportViewModel();
 		const executedPreFiles = new Set<string>();
+		const globalPreFiles = sqlFile.getGlobalPreFiles();
+		if (globalPreFiles.length > 0) {
+			const ranGlobalPreFiles = await exportViewModel.runPreFiles(editor.document.uri, globalPreFiles, executedPreFiles);
+			if (!ranGlobalPreFiles) {
+				return;
+			}
+		}
 		let skippedMissingConfigCount = 0;
 		let cancelledCount = 0;
 		let executedCreateCount = 0;

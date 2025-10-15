@@ -10,11 +10,13 @@ export class SqlSheetConfiguration {
         table_name: "An alternative name for the table",
         data_only: "Set to \"true\"/\"1\"/\"yes\" to output only data without headers",
         skip: "Set to \"true\"/\"1\"/\"yes\" to skip processing this query",
-        pre_file: "Path to a SQL file that should be executed before this query"
+        pre_file: "One or more SQL files to execute before the main query. Repeat the parameter on separate lines for multiple files."
     };
 
     // Boolean parameters list
     public static readonly booleanParameters: string[] = ['transpose', 'data_only', 'skip'];
+
+    public readonly pre_files: string[];
 
     // Static method to convert string to boolean
     public static stringToBoolean(value?: string): boolean | undefined {
@@ -48,11 +50,25 @@ export class SqlSheetConfiguration {
         public readonly start_named_range?: string,
         public readonly name?: string,
         public readonly table_name?: string,
-        public readonly pre_file?: string,
+        pre_files?: string | string[],
         public readonly transpose: boolean = false,
         public readonly data_only: boolean = false,
         public readonly skip: boolean = false,
-    ) { }
+    ) {
+        if (Array.isArray(pre_files)) {
+            this.pre_files = pre_files
+                .map(entry => entry.trim())
+                .filter(entry => entry.length > 0);
+        } else if (typeof pre_files === 'string' && pre_files.trim().length > 0) {
+            this.pre_files = [pre_files.trim()];
+        } else {
+            this.pre_files = [];
+        }
+    }
+
+    public get pre_file(): string | undefined {
+        return this.pre_files[0];
+    }
 
     /**
      * Determine whether this configuration contains either a start cell or a named range

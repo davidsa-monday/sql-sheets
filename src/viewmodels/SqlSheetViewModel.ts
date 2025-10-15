@@ -6,7 +6,9 @@ import { SqlQuery } from '../models/SqlQuery';
 export class SqlSheetViewModel {
     // Get all parameter keys from SqlSheetConfiguration using reflection
     private static _parameterKeys: string[] = Object.getOwnPropertyNames(
-        new SqlSheetConfiguration()).filter(key => key !== 'constructor' && key !== 'start_named_range' && key !== 'sheet_id');
+        new SqlSheetConfiguration())
+        .filter(key => key !== 'constructor' && key !== 'start_named_range' && key !== 'sheet_id')
+        .map(key => key === 'pre_files' ? 'pre_file' : key);
 
     // Expose the keys as a property
     public get parameterKeys(): string[] {
@@ -48,8 +50,12 @@ export class SqlSheetViewModel {
         this.onActiveEditorChanged();
     }
 
-    public get config(): SqlSheetConfiguration {
-        return this._activeQuery?.config ?? new SqlSheetConfiguration();
+    public get config(): Record<string, unknown> {
+        const config = this._activeQuery?.config ?? new SqlSheetConfiguration();
+        return {
+            ...config,
+            pre_file: config.pre_files[0] ?? ''
+        };
     }
 
     public async updateParameter(key: string, value: string): Promise<void> {

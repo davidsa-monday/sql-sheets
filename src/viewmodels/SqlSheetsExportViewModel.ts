@@ -65,16 +65,13 @@ export class SqlSheetsExportViewModel {
                 return ExportResult.SkippedMissingConfig;
             }
 
-            if (executeDependencies && sqlQuery.config.pre_file) {
-                const resolvedPreFile = this._resolvePreFilePath(sqlQuery, sqlQuery.config.pre_file);
-                if (!resolvedPreFile) {
-                    vscode.window.showErrorMessage(`Unable to resolve pre_file path: ${sqlQuery.config.pre_file}`);
-                    return ExportResult.UserCancelled;
-                }
-
-                if (!executedPreFiles.has(resolvedPreFile)) {
-                    await this._executePreFile(resolvedPreFile);
-                    executedPreFiles.add(resolvedPreFile);
+            if (executeDependencies) {
+                const preFiles = sqlQuery.config.pre_files;
+                if (preFiles.length > 0) {
+                    const ranDependencies = await this.runPreFiles(sqlQuery.documentUri, preFiles, executedPreFiles);
+                    if (!ranDependencies) {
+                        return ExportResult.UserCancelled;
+                    }
                 }
             }
 
@@ -194,7 +191,7 @@ export class SqlSheetsExportViewModel {
             startNamedRange,
             name || defaultTableTitle,
             config.table_name,
-            config.pre_file,
+            config.pre_files,
             transpose,
             data_only,
             config.skip
@@ -295,7 +292,7 @@ export class SqlSheetsExportViewModel {
             generatedName,
             config.name,
             config.table_name,
-            config.pre_file,
+            config.pre_files,
             config.transpose,
             config.data_only,
             config.skip
@@ -366,7 +363,37 @@ export class SqlSheetsExportViewModel {
         }
     }
 
-    private _resolvePreFilePath(query: SqlQuery, preFile: string): string | undefined {
+    public async runPreFiles(
+        documentUri: vscode.Uri,
+        preFiles: readonly string[],
+        executedPreFiles: Set<string>
+    ): Promise<boolean> {
+        if (!preFiles || preFiles.length === 0) {
+            return true;
+        }
+
+        for (const rawPreFile of preFiles) {
+            const trimmedPreFile = rawPreFile.trim();
+            if (trimmedPreFile.length === 0) {
+                continue;
+            }
+
+            const resolvedPreFile = this._resolvePreFilePath(documentUri, trimmedPreFile);
+            if (!resolvedPreFile) {
+                vscode.window.showErrorMessage(`Unable to resolve pre_file path: ${trimmedPreFile}`);
+                return false;
+            }
+
+            if (!executedPreFiles.has(resolvedPreFile)) {
+                await this._executePreFile(resolvedPreFile);
+                executedPreFiles.add(resolvedPreFile);
+            }
+        }
+
+        return true;
+    }
+
+    private _resolvePreFilePath(documentUri: vscode.Uri, preFile: string): string | undefined {
         try {
             if (!preFile || preFile.trim().length === 0) {
                 return undefined;
@@ -378,14 +405,14 @@ export class SqlSheetsExportViewModel {
                 return path.normalize(trimmedPreFile);
             }
 
-            const workspaceFolder = vscode.workspace.getWorkspaceFolder(query.documentUri)
+            const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri)
                 ?? vscode.workspace.workspaceFolders?.[0];
 
             if (workspaceFolder) {
                 return path.normalize(path.resolve(workspaceFolder.uri.fsPath, trimmedPreFile));
             }
 
-            const queryFilePath = query.documentUri.fsPath;
+            const queryFilePath = documentUri.fsPath;
             if (!queryFilePath) {
                 return undefined;
             }

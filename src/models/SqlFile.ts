@@ -5,6 +5,7 @@ import { SqlSheetConfiguration } from './SqlSheetConfiguration';
 export class SqlFile {
     private _queries: SqlQuery[] = [];
     private defaultParameterRanges: Record<string, { start: number; end: number }> = {};
+    private topLevelPreFiles: string[] = [];
 
     constructor(public readonly document: vscode.TextDocument) {
         this.parse();
@@ -12,6 +13,10 @@ export class SqlFile {
 
     public get queries(): SqlQuery[] {
         return this._queries;
+    }
+
+    public getGlobalPreFiles(): string[] {
+        return [...this.topLevelPreFiles];
     }
 
     public getQueryAt(position: vscode.Position): SqlQuery | undefined {
@@ -93,6 +98,7 @@ export class SqlFile {
         const defaultParameters = this.extractDefaultParameters(text);
         const defaultParams = defaultParameters.values;
         this.defaultParameterRanges = defaultParameters.ranges;
+        this.topLevelPreFiles = defaultParameters.preFiles;
         const queryBlocks = text.split(';').filter(b => b.trim().length > 0);
 
         let currentOffset = 0;
@@ -109,11 +115,20 @@ export class SqlFile {
             for (const key of Object.keys(defaultParams)) {
                 parameterSources[key] = 'default';
             }
+            const preFiles: string[] = [];
             let queryText = block;
 
             while ((match = regex.exec(block)) !== null) {
-                params[match[1]] = match[2].trim();
-                parameterSources[match[1]] = 'query';
+                const key = match[1];
+                const value = match[2].trim();
+
+                if (key === 'pre_file') {
+                    preFiles.push(value);
+                    continue;
+                }
+
+                params[key] = value;
+                parameterSources[key] = 'query';
             }
 
             if (queryText.length > 0) {
@@ -158,7 +173,7 @@ export class SqlFile {
                 startNamedRange,
                 params['name'],
                 params['table_name'],
-                params['pre_file'],
+                preFiles,
                 SqlSheetConfiguration.stringToBoolean(params['transpose']),
                 SqlSheetConfiguration.stringToBoolean(params['data_only']),
                 SqlSheetConfiguration.stringToBoolean(params['skip'])
@@ -172,9 +187,11 @@ export class SqlFile {
     private extractDefaultParameters(text: string): {
         values: Record<string, string>;
         ranges: Record<string, { start: number; end: number }>;
+        preFiles: string[];
     } {
         const defaults: Record<string, string> = {};
         const ranges: Record<string, { start: number; end: number }> = {};
+        const preFiles: string[] = [];
         const lineRegex = /^.*(?:\r?\n|$)/gm;
         let match: RegExpExecArray | null;
 
@@ -192,6 +209,11 @@ export class SqlFile {
             if (parameterMatch) {
                 const key = parameterMatch[1];
                 const value = parameterMatch[2].trim();
+                if (key === 'pre_file') {
+                    preFiles.push(value);
+                    continue;
+                }
+
                 defaults[key] = value;
                 ranges[key] = {
                     start: lineStart,
@@ -207,6 +229,6 @@ export class SqlFile {
             break;
         }
 
-        return { values: defaults, ranges };
+        return { values: defaults, ranges, preFiles };
     }
 }
