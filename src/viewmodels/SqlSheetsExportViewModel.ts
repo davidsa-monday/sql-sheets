@@ -40,20 +40,43 @@ export class SqlSheetsExportViewModel {
             if (!sqlQuery) {
                 throw new Error('No SQL query provided for export');
             }
+            const executeDependencies = options.executeDependencies ?? false;
+            const executedPreFiles = options.executedPreFiles ?? new Set<string>();
+            const destinationEntries = sqlQuery.destinations.map((destination, index) => ({ destination, index }));
+            const nonSkippedDestinations = destinationEntries.filter(entry => !entry.destination.config.skip);
 
-            if (sqlQuery.config.skip) {
-                logger.info('Skipping query export because the configuration is marked to skip.');
+            if (nonSkippedDestinations.length === 0) {
+                if (this._isCreateStatement(sqlQuery.queryText)) {
+                    await this._executeCreateStatement(sqlQuery.queryText);
+                    return ExportResult.ExecutedCreate;
+                }
+
+                logger.info('Skipping query export because all destinations are marked to skip.', { audience: ['support'] });
                 return ExportResult.SkippedMissingConfig;
             }
 
-            const executeDependencies = options.executeDependencies ?? false;
-            const executedPreFiles = options.executedPreFiles ?? new Set<string>();
+            const completedDestinations: Array<{ index: number; config: SqlSheetConfiguration }> = [];
+            for (const entry of nonSkippedDestinations) {
+                const baseConfig = entry.destination.config;
+                const defaultTitle = baseConfig.name
+                    ?? sqlQuery.config.name
+                    ?? `SQL Query Result (${entry.index + 1})`;
 
-            const hasRequiredConfig = this._hasRequiredConfig(sqlQuery.config);
-            const isCreateStatement = this._isCreateStatement(sqlQuery.queryText);
+                let configured: SqlSheetConfiguration = baseConfig;
+                if (!this._hasRequiredConfig(baseConfig)) {
+                    const prompted = await this._promptForMissingConfig(baseConfig, defaultTitle);
+                    if (!prompted) {
+                        return ExportResult.UserCancelled;
+                    }
+                    configured = prompted;
+                }
 
-            if (!hasRequiredConfig) {
-                if (isCreateStatement) {
+                const effectiveConfig = this._ensureNamedRange(sqlQuery, entry.index, configured);
+                completedDestinations.push({ index: entry.index, config: effectiveConfig });
+            }
+
+            if (completedDestinations.length === 0) {
+                if (this._isCreateStatement(sqlQuery.queryText)) {
                     await this._executeCreateStatement(sqlQuery.queryText);
                     return ExportResult.ExecutedCreate;
                 }
@@ -66,31 +89,34 @@ export class SqlSheetsExportViewModel {
             }
 
             if (executeDependencies) {
-                const preFiles = sqlQuery.config.pre_files;
-                if (preFiles.length > 0) {
-                    const ranDependencies = await this.runPreFiles(sqlQuery.documentUri, preFiles, executedPreFiles);
+                const preFileSet = new Set<string>();
+                for (const destination of completedDestinations) {
+                    for (const preFile of destination.config.pre_files) {
+                        preFileSet.add(preFile);
+                    }
+                }
+
+                if (preFileSet.size > 0) {
+                    const ranDependencies = await this.runPreFiles(sqlQuery.documentUri, Array.from(preFileSet), executedPreFiles);
                     if (!ranDependencies) {
                         return ExportResult.UserCancelled;
                     }
                 }
             }
 
-            const completedConfig = await this._promptForMissingConfig(
-                sqlQuery.config,
-                sqlQuery.config.name ?? 'SQL Query Result'
-            );
-            if (!completedConfig) {
-                return ExportResult.UserCancelled;
+            const snowflakeService = getSnowflakeService();
+            if (!snowflakeService.isConfigured()) {
+                throw new Error('Snowflake connection is not configured');
             }
-
-            // Get the export service and perform the export
-            const effectiveConfig = this._ensureNamedRange(sqlQuery, completedConfig);
-
             const exportService = getGoogleSheetsExportService();
-            const uploadResult = await exportService.exportQueryToSheet(sqlQuery.queryText, effectiveConfig);
 
-            if (uploadResult) {
-                await this._updateStartCellParameter(sqlQuery, uploadResult);
+            const results = await snowflakeService.executeQuery(sqlQuery.queryText);
+
+            for (const destination of completedDestinations) {
+                const uploadResult = await exportService.exportResultsToSheet(results, sqlQuery.queryText, destination.config);
+                if (uploadResult) {
+                    await this._updateStartCellParameterForDestination(sqlQuery, destination.index, uploadResult);
+                }
             }
 
             return ExportResult.Exported;
@@ -274,6 +300,7 @@ export class SqlSheetsExportViewModel {
 
     private _ensureNamedRange(
         query: SqlQuery,
+        destinationIndex: number,
         config: SqlSheetConfiguration
     ): SqlSheetConfiguration {
         const hasNamedRange = typeof config.start_named_range === 'string' && config.start_named_range.trim().length > 0;
@@ -281,7 +308,7 @@ export class SqlSheetsExportViewModel {
             return config;
         }
 
-        const generatedName = this._generateDeterministicNamedRange(query, config);
+        const generatedName = this._generateDeterministicNamedRange(query, destinationIndex, config);
         logger.info(`Generated named range "${generatedName}" for export run.`, { audience: ['developer'] });
 
         return new SqlSheetConfiguration(
@@ -301,6 +328,7 @@ export class SqlSheetsExportViewModel {
 
     private _generateDeterministicNamedRange(
         query: SqlQuery,
+        destinationIndex: number,
         config: SqlSheetConfiguration
     ): string {
         const editor = vscode.window.activeTextEditor;
@@ -311,18 +339,25 @@ export class SqlSheetsExportViewModel {
             : (config.sheet_name ?? '');
         const startCell = config.start_cell ?? '';
 
-        const seed = `${sqlFilePath}|${tableTitle}|${sheetIdentifier}|${startCell}|${query.startOffset}|${query.endOffset}`;
+        const seed = `${sqlFilePath}|${tableTitle}|${sheetIdentifier}|${startCell}|${query.startOffset}|${query.endOffset}|dest:${destinationIndex}`;
         const hash = createHash('md5').update(seed).digest('hex').slice(0, 10);
         return `SQLS_${hash}`;
     }
 
-    private async _updateStartCellParameter(
+    private async _updateStartCellParameterForDestination(
         query: SqlQuery,
+        destinationIndex: number,
         uploadResult: SheetUploadResult
     ): Promise<void> {
-        const namedRangeFromResult = uploadResult.startNamedRange ?? query.config.start_named_range;
+        const destination = query.destinations[destinationIndex];
+        if (!destination) {
+            return;
+        }
+
+        const destinationConfig = destination.config;
+        const namedRangeFromResult = uploadResult.startNamedRange ?? destinationConfig.start_named_range;
         if (!namedRangeFromResult) {
-            return; // Only update files when a named range is involved
+            return;
         }
 
         const newCombinedValue = SqlSheetConfiguration.formatStartCellParameter(
@@ -331,8 +366,8 @@ export class SqlSheetsExportViewModel {
         );
 
         const existingCombinedValue = SqlSheetConfiguration.formatStartCellParameter(
-            query.config.start_named_range,
-            query.config.start_cell
+            destinationConfig.start_named_range,
+            destinationConfig.start_cell
         );
 
         const document = await vscode.workspace.openTextDocument(query.documentUri);
@@ -343,23 +378,55 @@ export class SqlSheetsExportViewModel {
             return;
         }
 
+        const targetDestination = matchingQuery.destinations[destinationIndex];
+        if (!targetDestination) {
+            logger.warn('Destination metadata not found during parameter update.', { audience: ['developer'] });
+            return;
+        }
+
         if (newCombinedValue !== existingCombinedValue) {
-            await sqlFile.updateParameter(matchingQuery, 'start_cell', newCombinedValue);
-            logger.info(`Updated start_cell parameter to "${newCombinedValue}" in SQL file.`, { audience: ['developer'] });
+            if (destinationIndex === 0) {
+                await sqlFile.updateParameter(matchingQuery, 'start_cell', newCombinedValue);
+                logger.info(`Updated start_cell parameter to "${newCombinedValue}" in SQL file.`, { audience: ['developer'] });
+            } else {
+                const rangeInfo = targetDestination.parameterRanges.get('start_cell');
+                if (rangeInfo) {
+                    const edit = new vscode.WorkspaceEdit();
+                    const range = new vscode.Range(document.positionAt(rangeInfo.start), document.positionAt(rangeInfo.end));
+                    edit.replace(document.uri, range, `--start_cell: ${newCombinedValue}`);
+                    await vscode.workspace.applyEdit(edit);
+                    logger.info(`Updated start_cell parameter to "${newCombinedValue}" in SQL file (destination ${destinationIndex + 1}).`, { audience: ['developer'] });
+                } else {
+                    logger.warn('Unable to update start_cell for non-primary destination because no parameter range was recorded.', { audience: ['developer'] });
+                }
+            }
         }
 
         const newSheetParameter = SqlSheetConfiguration.formatSheetNameParameter(
-            uploadResult.sheetId ?? query.config.sheet_id,
-            uploadResult.sheetName ?? query.config.sheet_name
+            uploadResult.sheetId ?? destinationConfig.sheet_id,
+            uploadResult.sheetName ?? destinationConfig.sheet_name
         );
         const existingSheetParameter = SqlSheetConfiguration.formatSheetNameParameter(
-            query.config.sheet_id,
-            query.config.sheet_name
+            destinationConfig.sheet_id,
+            destinationConfig.sheet_name
         );
 
         if (newSheetParameter !== existingSheetParameter && newSheetParameter.length > 0) {
-            await sqlFile.updateParameter(matchingQuery, 'sheet_name', newSheetParameter);
-            logger.info(`Updated sheet_name parameter to "${newSheetParameter}" in SQL file.`, { audience: ['developer'] });
+            if (destinationIndex === 0) {
+                await sqlFile.updateParameter(matchingQuery, 'sheet_name', newSheetParameter);
+                logger.info(`Updated sheet_name parameter to "${newSheetParameter}" in SQL file.`, { audience: ['developer'] });
+            } else {
+                const rangeInfo = targetDestination.parameterRanges.get('sheet_name');
+                if (rangeInfo) {
+                    const edit = new vscode.WorkspaceEdit();
+                    const range = new vscode.Range(document.positionAt(rangeInfo.start), document.positionAt(rangeInfo.end));
+                    edit.replace(document.uri, range, `--sheet_name: ${newSheetParameter}`);
+                    await vscode.workspace.applyEdit(edit);
+                    logger.info(`Updated sheet_name parameter to "${newSheetParameter}" in SQL file (destination ${destinationIndex + 1}).`, { audience: ['developer'] });
+                } else {
+                    logger.warn('Unable to update sheet_name for non-primary destination because no parameter range was recorded.', { audience: ['developer'] });
+                }
+            }
         }
     }
 
@@ -372,6 +439,25 @@ export class SqlSheetsExportViewModel {
             return true;
         }
 
+        const processing = new Set<string>();
+
+        try {
+            await this._runPreFilesRecursive(documentUri, preFiles, executedPreFiles, processing);
+            return true;
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            vscode.window.showErrorMessage(message);
+            logger.error('Failed to execute pre_file dependency chain', { data: err });
+            return false;
+        }
+    }
+
+    private async _runPreFilesRecursive(
+        documentUri: vscode.Uri,
+        preFiles: readonly string[],
+        executedPreFiles: Set<string>,
+        processing: Set<string>
+    ): Promise<void> {
         for (const rawPreFile of preFiles) {
             const trimmedPreFile = rawPreFile.trim();
             if (trimmedPreFile.length === 0) {
@@ -380,17 +466,11 @@ export class SqlSheetsExportViewModel {
 
             const resolvedPreFile = this._resolvePreFilePath(documentUri, trimmedPreFile);
             if (!resolvedPreFile) {
-                vscode.window.showErrorMessage(`Unable to resolve pre_file path: ${trimmedPreFile}`);
-                return false;
+                throw new Error(`Unable to resolve pre_file path: ${trimmedPreFile}`);
             }
 
-            if (!executedPreFiles.has(resolvedPreFile)) {
-                await this._executePreFile(resolvedPreFile);
-                executedPreFiles.add(resolvedPreFile);
-            }
+            await this._executePreFile(resolvedPreFile, executedPreFiles, processing);
         }
-
-        return true;
     }
 
     private _resolvePreFilePath(documentUri: vscode.Uri, preFile: string): string | undefined {
@@ -424,39 +504,123 @@ export class SqlSheetsExportViewModel {
         }
     }
 
-    private async _executePreFile(filePath: string): Promise<void> {
+    private async _executePreFile(
+        filePath: string,
+        executedPreFiles: Set<string>,
+        processing: Set<string>
+    ): Promise<void> {
+        const normalizedPath = path.normalize(filePath);
+        if (executedPreFiles.has(normalizedPath)) {
+            return;
+        }
+
+        if (processing.has(normalizedPath)) {
+            throw new Error(`Circular pre_file dependency detected involving ${normalizedPath}`);
+        }
+
+        processing.add(normalizedPath);
+
         try {
-            await fs.access(filePath);
+            await fs.access(normalizedPath);
         } catch {
-            throw new Error(`pre_file not found: ${filePath}`);
+            processing.delete(normalizedPath);
+            throw new Error(`pre_file not found: ${normalizedPath}`);
         }
 
         let fileContents: string;
         try {
-            fileContents = await fs.readFile(filePath, 'utf-8');
+            fileContents = await fs.readFile(normalizedPath, 'utf-8');
         } catch (err) {
-            throw new Error(`Failed to read pre_file ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+            processing.delete(normalizedPath);
+            throw new Error(`Failed to read pre_file ${normalizedPath}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+
+        const nestedPreFiles = this._extractPreFileDirectives(fileContents);
+        if (nestedPreFiles.length > 0) {
+            const preFileUri = vscode.Uri.file(normalizedPath);
+            await this._runPreFilesRecursive(preFileUri, nestedPreFiles, executedPreFiles, processing);
         }
 
         if (fileContents.trim().length === 0) {
-            logger.info(`Pre-file ${filePath} is empty. Skipping execution.`, { audience: ['developer'] });
+            logger.info(`Pre-file ${normalizedPath} is empty. Skipping execution.`, { audience: ['developer'] });
+            processing.delete(normalizedPath);
+            executedPreFiles.add(normalizedPath);
+            return;
+        }
+
+        if (this._shouldSkipSelectStatement(fileContents)) {
+            logger.info(`Skipping pre-file ${normalizedPath} because it only contains a SELECT statement.`, { audience: ['developer'] });
+            processing.delete(normalizedPath);
+            executedPreFiles.add(normalizedPath);
             return;
         }
 
         const snowflakeService = getSnowflakeService();
         if (!snowflakeService.isConfigured()) {
+            processing.delete(normalizedPath);
             throw new Error('Snowflake connection is not configured. Cannot execute pre_file.');
         }
 
-        await vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: `Executing pre-file: ${path.basename(filePath)}`,
-            cancellable: false
-        }, async () => {
-            logger.info(`Executing pre_file ${filePath}`, { audience: ['developer'] });
-            await snowflakeService.executeQuery(fileContents);
-            logger.info(`Completed pre_file ${filePath}`, { audience: ['developer'] });
-        });
+        try {
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: `Executing pre-file: ${path.basename(normalizedPath)}`,
+                cancellable: false
+            }, async () => {
+                logger.info(`Executing pre_file ${normalizedPath}`, { audience: ['developer'] });
+                await snowflakeService.executeQuery(fileContents);
+                logger.info(`Completed pre_file ${normalizedPath}`, { audience: ['developer'] });
+            });
+            executedPreFiles.add(normalizedPath);
+        } finally {
+            processing.delete(normalizedPath);
+        }
+    }
+
+    private _extractPreFileDirectives(fileContents: string): string[] {
+        const results: string[] = [];
+        const directiveRegex = /^--\s*pre_file:[\t ]*(.*)$/gim;
+        let match: RegExpExecArray | null;
+
+        while ((match = directiveRegex.exec(fileContents)) !== null) {
+            const entry = match[1]?.trim() ?? '';
+            if (entry.length > 0) {
+                results.push(entry);
+            }
+        }
+
+        return results;
+    }
+
+    private _shouldSkipSelectStatement(sqlText: string): boolean {
+        const withoutBlockComments = sqlText.replace(/\/\*[\s\S]*?\*\//g, ' ');
+        const statements = withoutBlockComments.split(';');
+
+        for (const rawStatement of statements) {
+            const trimmedStatement = rawStatement.trim();
+            if (trimmedStatement.length === 0) {
+                continue;
+            }
+
+            const sanitizedLines = trimmedStatement
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0 && !line.startsWith('--'));
+
+            if (sanitizedLines.length === 0) {
+                continue;
+            }
+
+            const firstLine = sanitizedLines[0];
+            if (this._isIgnorableLeadingStatement(firstLine)) {
+                // Statements like USE or SET are treated as ignorable and don't trigger skipping.
+                continue;
+            }
+
+            return /^(select|with)\b/i.test(firstLine);
+        }
+
+        return false;
     }
 }
 

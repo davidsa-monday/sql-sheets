@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { SqlQuery } from './SqlQuery';
+import { SqlQuery, QueryDestination } from './SqlQuery';
 import { SqlSheetConfiguration } from './SqlSheetConfiguration';
 
 const NON_INHERITABLE_DEFAULTS = new Set(['start_cell', 'name', 'table_name']);
@@ -109,79 +109,123 @@ export class SqlFile {
             const startOffset = text.indexOf(block, currentOffset);
             const endOffset = startOffset + blockWithSemicolon.length;
 
-            const regex = /--(\w+):[\t ]*(.*)/g;
-            let match;
-            const params: { [key: string]: string } = { ...defaultParams };
-            const parameterSources: Record<string, 'default' | 'query'> = {};
-
+            const defaultSourceMap: Record<string, 'default' | 'query'> = {};
             for (const key of Object.keys(defaultParams)) {
-                parameterSources[key] = 'default';
+                defaultSourceMap[key] = 'default';
             }
+
             const preFiles: string[] = [];
-            let queryText = block;
+            const headerLinesMeta: Array<{ lineContent: string; trimmed: string; start: number; end: number }> = [];
+            const lineRegex = /^.*(?:\r?\n|$)/gm;
+            let headerEndRelative = block.length;
+            let lineMatch: RegExpExecArray | null;
 
-            while ((match = regex.exec(block)) !== null) {
-                const key = match[1];
-                const value = match[2].trim();
+            lineRegex.lastIndex = 0;
+            while ((lineMatch = lineRegex.exec(block)) !== null) {
+                const lineWithEol = lineMatch[0];
+                const lineStart = lineMatch.index;
+                const lineEnd = lineStart + lineWithEol.length;
+                const lineContent = lineWithEol.replace(/\r?\n$/, '');
+                const trimmed = lineContent.trim();
 
-                if (key === 'pre_file') {
-                    preFiles.push(value);
+                if (trimmed.length === 0 || trimmed.startsWith('--')) {
+                    headerLinesMeta.push({ lineContent, trimmed, start: lineStart, end: lineEnd });
                     continue;
                 }
 
-                params[key] = value;
-                parameterSources[key] = 'query';
+                headerEndRelative = lineStart;
+                break;
             }
 
-            if (queryText.length > 0) {
-                const lines = queryText.split('\n');
-                let firstStatementLine = 0;
+            const destinationParamsList: Record<string, string>[] = [];
+            const destinationSourcesList: Record<string, 'default' | 'query'>[] = [];
+            const destinationParameterRanges: Array<Map<string, { start: number; end: number }>> = [];
 
-                while (firstStatementLine < lines.length) {
-                    const trimmedLine = lines[firstStatementLine].trim();
+            if (headerLinesMeta.length === 0) {
+                destinationParamsList.push({ ...defaultParams });
+                destinationSourcesList.push({ ...defaultSourceMap });
+                destinationParameterRanges.push(new Map());
+            } else {
+                const separatorRegex = /^--\s*\d+\s*$/;
+                let currentParams: Record<string, string> = { ...defaultParams };
+                let currentSources: Record<string, 'default' | 'query'> = { ...defaultSourceMap };
+                let currentRanges: Map<string, { start: number; end: number }> = new Map();
 
-                    if (trimmedLine.length === 0) {
-                        firstStatementLine++;
+                for (const lineMeta of headerLinesMeta) {
+                    const trimmed = lineMeta.trimmed;
+
+                    if (separatorRegex.test(trimmed)) {
+                        destinationParamsList.push(currentParams);
+                        destinationSourcesList.push(currentSources);
+                        destinationParameterRanges.push(currentRanges);
+
+                        currentParams = { ...defaultParams };
+                        currentSources = { ...defaultSourceMap };
+                        currentRanges = new Map();
                         continue;
                     }
 
-                    if (/^--\w+:/.test(trimmedLine)) {
-                        firstStatementLine++;
+                    const parameterMatch = /^--(\w+):[\t ]*(.*)$/.exec(lineMeta.lineContent);
+                    if (parameterMatch) {
+                        const key = parameterMatch[1];
+                        const value = parameterMatch[2].trim();
+
+                        if (key === 'pre_file') {
+                            preFiles.push(value);
+                            continue;
+                        }
+
+                        currentParams[key] = value;
+                        currentSources[key] = 'query';
+
+                        const paramStartInLine = lineMeta.lineContent.indexOf(parameterMatch[0]);
+                        const absoluteStart = startOffset + lineMeta.start + Math.max(paramStartInLine, 0);
+                        const absoluteEnd = absoluteStart + parameterMatch[0].length;
+                        currentRanges.set(key, { start: absoluteStart, end: absoluteEnd });
                         continue;
                     }
-
-                    break;
                 }
 
-                queryText = lines.slice(firstStatementLine).join('\n');
+                destinationParamsList.push(currentParams);
+                destinationSourcesList.push(currentSources);
+                destinationParameterRanges.push(currentRanges);
             }
 
-            const combinedSheetParameter = SqlSheetConfiguration.parseSheetNameParameter(params['sheet_name']);
-            const sheetId = combinedSheetParameter.sheetId;
-            const sheetName = combinedSheetParameter.sheetName ?? (sheetId === undefined ? params['sheet_name'] : undefined);
+            let queryText = block.substring(headerEndRelative);
+            if (queryText.length > 0) {
+                queryText = queryText.replace(/^[\r\n]+/, '');
+            }
 
-            const combinedStartParameter = SqlSheetConfiguration.parseStartCellParameter(params['start_cell']);
-            const startNamedRange = combinedStartParameter.startNamedRange ?? params['start_named_range'];
-            const startCell = combinedStartParameter.startCell ?? (!startNamedRange ? params['start_cell'] : undefined);
+            const queryDestinations: QueryDestination[] = destinationParamsList.map((paramValues, index) => {
+                const combinedSheetParameter = SqlSheetConfiguration.parseSheetNameParameter(paramValues['sheet_name']);
+                const sheetId = combinedSheetParameter.sheetId;
+                const sheetName = combinedSheetParameter.sheetName ?? (sheetId === undefined ? paramValues['sheet_name'] : undefined);
 
-            // Process boolean parameters using centralized validation in SqlSheetConfiguration
-            // If the parameter doesn't exist in the SQL comment, it will be undefined
-            // and the constructor will use the default value (false)
-            const config = new SqlSheetConfiguration(
-                params['spreadsheet_id'],
-                sheetName,
-                sheetId,
-                startCell,
-                startNamedRange,
-                params['name'],
-                params['table_name'],
-                preFiles,
-                SqlSheetConfiguration.stringToBoolean(params['transpose']),
-                SqlSheetConfiguration.stringToBoolean(params['data_only']),
-                SqlSheetConfiguration.stringToBoolean(params['skip'])
-            );
+                const combinedStartParameter = SqlSheetConfiguration.parseStartCellParameter(paramValues['start_cell']);
+                const startNamedRange = combinedStartParameter.startNamedRange ?? paramValues['start_named_range'];
+                const startCell = combinedStartParameter.startCell ?? (!startNamedRange ? paramValues['start_cell'] : undefined);
 
-            this._queries.push(new SqlQuery(config, queryText, startOffset, endOffset, this.document.uri, parameterSources));
+                return {
+                    config: new SqlSheetConfiguration(
+                        paramValues['spreadsheet_id'],
+                        sheetName,
+                        sheetId,
+                        startCell,
+                        startNamedRange,
+                        paramValues['name'],
+                        paramValues['table_name'],
+                        preFiles,
+                        SqlSheetConfiguration.stringToBoolean(paramValues['transpose']),
+                        SqlSheetConfiguration.stringToBoolean(paramValues['data_only']),
+                        SqlSheetConfiguration.stringToBoolean(paramValues['skip'])
+                    ),
+                    parameterRanges: destinationParameterRanges[index] ?? new Map<string, { start: number; end: number }>()
+                };
+            });
+
+            const parameterSources = { ...(destinationSourcesList[0] ?? {}) };
+
+            this._queries.push(new SqlQuery(queryDestinations, queryText, startOffset, endOffset, this.document.uri, parameterSources));
             currentOffset = endOffset;
         }
     }

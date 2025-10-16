@@ -7,6 +7,17 @@ import { getLogger } from './loggingService';
 
 const logger = getLogger();
 
+type PreparedUploadContext = {
+    spreadsheetId: string;
+    sheetIdentifier: string | number;
+    startCell?: string;
+    startNamedRange?: string;
+    tableTitle?: string;
+    tableName?: string;
+    transpose: boolean;
+    dataOnly: boolean;
+};
+
 /**
  * Service for exporting SQL query results to Google Sheets
  */
@@ -21,158 +32,185 @@ export class GoogleSheetsExportService {
         sqlQuery: string,
         config: SqlSheetConfiguration
     ): Promise<SheetUploadResult | void> {
-        const {
-            spreadsheet_id: spreadsheetId,
-            sheet_name: sheetName,
-            sheet_id: sheetId,
-            start_cell: startCell,
-            start_named_range: startNamedRange,
-            name: tableTitle,
-            transpose,
-            data_only: dataOnly,
-            skip
-        } = config;
-
-        const cleanedStartNamedRange = typeof startNamedRange === 'string' ? startNamedRange.trim() : undefined;
-        const cleanedStartCell = typeof startCell === 'string' ? startCell.trim() : undefined;
-
-        if (skip) {
+        if (config.skip) {
             logger.info('Skipping query execution because configuration is marked skip', { audience: ['developer'] });
             return;
         }
 
-        // Validate inputs
+        try {
+            const uploadContext = this._prepareUploadContext(sqlQuery, config);
+
+            const snowflakeService = getSnowflakeService();
+            if (!snowflakeService.isConfigured()) {
+                throw new Error('Snowflake connection is not configured');
+            }
+
+            logger.info('Executing query in Snowflake...', { audience: ['developer'] });
+            const results = await snowflakeService.executeQuery(sqlQuery);
+            logger.info('Query executed successfully.', { audience: ['developer'] });
+
+            return await this._uploadResultsToSheet(results, sqlQuery, uploadContext);
+        } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            logger.error('Failed to export query to Google Sheet', { data: err });
+            vscode.window.showErrorMessage(`Failed to export query to Google Sheet: ${errorMessage}`);
+        }
+    }
+
+    public async exportResultsToSheet(
+        rawResults: any[],
+        sqlQuery: string,
+        config: SqlSheetConfiguration
+    ): Promise<SheetUploadResult | void> {
+        if (config.skip) {
+            logger.info('Skipping query export because configuration is marked skip', { audience: ['developer'] });
+            return;
+        }
+
+        try {
+            const uploadContext = this._prepareUploadContext(sqlQuery, config);
+            return await this._uploadResultsToSheet(rawResults, sqlQuery, uploadContext);
+        } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            logger.error('Failed to export prepared results to Google Sheet', { data: err });
+            vscode.window.showErrorMessage(`Failed to export query to Google Sheet: ${errorMessage}`);
+        }
+    }
+
+    private _prepareUploadContext(
+        sqlQuery: string,
+        config: SqlSheetConfiguration
+    ): PreparedUploadContext {
         if (!sqlQuery) {
             throw new Error('SQL query is required');
         }
+
+        const spreadsheetId = typeof config.spreadsheet_id === 'string'
+            ? config.spreadsheet_id.trim()
+            : '';
         if (!spreadsheetId) {
             throw new Error('Spreadsheet ID is required');
         }
-        const sheetIdentifier = sheetId !== undefined ? sheetId : sheetName;
-        if (sheetIdentifier === undefined || (typeof sheetIdentifier === 'string' && sheetIdentifier.trim() === '')) {
+
+        const sheetName = typeof config.sheet_name === 'string' ? config.sheet_name.trim() : undefined;
+        const sheetIdentifier = config.sheet_id !== undefined ? config.sheet_id : sheetName;
+        if (sheetIdentifier === undefined || (typeof sheetIdentifier === 'string' && sheetIdentifier.length === 0)) {
             throw new Error('Sheet name or ID is required');
         }
+
         if (typeof sheetIdentifier === 'string') {
             logger.info(`Using sheet name: "${sheetIdentifier}"`, { audience: ['developer'] });
-            // logger.revealOutput();
         } else {
             logger.info(`Using sheet ID: ${sheetIdentifier}`, { audience: ['developer'] });
-            // logger.revealOutput();
         }
+
+        const cleanedStartNamedRange = typeof config.start_named_range === 'string'
+            ? config.start_named_range.trim()
+            : undefined;
+        const cleanedStartCell = typeof config.start_cell === 'string'
+            ? config.start_cell.trim()
+            : undefined;
 
         if (!cleanedStartCell && !cleanedStartNamedRange) {
             throw new Error('A start cell or named range is required');
         }
 
         if (cleanedStartCell) {
-            // Validate start cell format
-            try {
-                const validCellFormat = /^[A-Za-z]+[0-9]+$/;
-                if (!validCellFormat.test(cleanedStartCell)) {
-                    throw new Error(`Start cell must be in the format like 'A1', 'B2', etc.`);
-                }
-
-                const columnPart = cleanedStartCell.match(/^[A-Za-z]+/)?.[0] || '';
-                const rowPart = cleanedStartCell.match(/[0-9]+$/)?.[0] || '';
-
-                if (!columnPart || columnPart.length === 0) {
-                    throw new Error(`Invalid column reference in start cell: ${cleanedStartCell}`);
-                }
-
-                if (!rowPart || parseInt(rowPart, 10) <= 0) {
-                    throw new Error(`Invalid row reference in start cell: ${cleanedStartCell}`);
-                }
-
-                logger.info(`Using start cell: ${cleanedStartCell} (column: ${columnPart}, row: ${rowPart})`, { audience: ['developer'] });
-                // logger.revealOutput();
-            } catch (err) {
-                throw new Error(`Invalid start cell format: ${err instanceof Error ? err.message : String(err)}`);
+            const validCellFormat = /^[A-Za-z]+[0-9]+$/;
+            if (!validCellFormat.test(cleanedStartCell)) {
+                throw new Error(`Start cell must be in the format like 'A1', 'B2', etc.`);
             }
+
+            const columnPart = cleanedStartCell.match(/^[A-Za-z]+/)?.[0] || '';
+            const rowPart = cleanedStartCell.match(/[0-9]+$/)?.[0] || '';
+
+            if (!columnPart || columnPart.length === 0) {
+                throw new Error(`Invalid column reference in start cell: ${cleanedStartCell}`);
+            }
+
+            if (!rowPart || parseInt(rowPart, 10) <= 0) {
+                throw new Error(`Invalid row reference in start cell: ${cleanedStartCell}`);
+            }
+
+            logger.info(`Using start cell: ${cleanedStartCell} (column: ${columnPart}, row: ${rowPart})`, { audience: ['developer'] });
         }
 
         if (cleanedStartNamedRange) {
             logger.info(`Using start named range: ${cleanedStartNamedRange}`, { audience: ['developer'] });
-            // logger.revealOutput();
         }
 
-        try {
-            // Get the services
-            const snowflakeService = getSnowflakeService();
-            const googleService = getGoogleSheetsService();
+        return {
+            spreadsheetId,
+            sheetIdentifier,
+            startCell: cleanedStartCell,
+            startNamedRange: cleanedStartNamedRange,
+            tableTitle: config.name,
+            tableName: config.table_name,
+            transpose: Boolean(config.transpose),
+            dataOnly: Boolean(config.data_only)
+        };
+    }
 
-            // Check if the services are configured
-            if (!snowflakeService.isConfigured()) {
-                throw new Error('Snowflake connection is not configured');
+    private async _uploadResultsToSheet(
+        rawResults: any[],
+        sqlQuery: string,
+        context: PreparedUploadContext
+    ): Promise<SheetUploadResult | void> {
+        if (rawResults.length === 0) {
+            logger.info('Query returned no results. Nothing to upload.', { audience: ['developer'] });
+            return;
+        }
+
+        const headers = Object.keys(rawResults[0]);
+        const data = rawResults.map(row => Object.values(row));
+        const dataToUpload = context.dataOnly ? data : [headers, ...data];
+
+        const googleService = getGoogleSheetsService();
+        if (!googleService.isConfigured()) {
+            throw new Error('Google Sheets API is not configured');
+        }
+
+        logger.info('Uploading data to Google Sheets...', { audience: ['developer'] });
+        const uploadResult: SheetUploadResult = await googleService.uploadDataToSheet(
+            dataToUpload,
+            context.spreadsheetId,
+            context.sheetIdentifier,
+            context.startCell,
+            {
+                startNamedRange: context.startNamedRange,
+                transpose: context.transpose,
+                tableTitle: context.tableTitle,
+                dataOnly: context.dataOnly,
+                sqlQuery,
+                tableName: context.tableName
             }
+        );
+        logger.info('Data uploaded successfully.', { audience: ['developer'] });
 
-            if (!googleService.isConfigured()) {
-                throw new Error('Google Sheets API is not configured');
-            }
+        logger.info(`Spreadsheet ID: ${context.spreadsheetId}`);
+        const displaySheetName = uploadResult.sheetName
+            ?? (typeof context.sheetIdentifier === 'string' ? context.sheetIdentifier : undefined)
+            ?? (typeof context.sheetIdentifier === 'number' ? context.sheetIdentifier.toString() : '');
+        if (displaySheetName) {
+            logger.info(`Sheet: ${displaySheetName}`);
+        }
+        logger.info(`Range: ${uploadResult.range}`);
 
-            // Execute the query using the Snowflake service
-            logger.info('Executing query in Snowflake...', { audience: ['developer'] });
-            // logger.revealOutput();
-            const results = await snowflakeService.executeQuery(sqlQuery);
-            logger.info('Query executed successfully.', { audience: ['developer'] });
-
-            // Check if there are results to upload
-            if (results.length === 0) {
-                logger.info('Query returned no results. Nothing to upload.', { audience: ['developer'] });
-                return;
-            }
-
-            // Prepare the data for Google Sheets
-            const headers = Object.keys(results[0]);
-            const data = results.map(row => Object.values(row));
-            const dataToUpload = dataOnly ? data : [headers, ...data];
-
-            // Upload the data to Google Sheets
-            logger.info('Uploading data to Google Sheets...', { audience: ['developer'] });
-            const uploadResult: SheetUploadResult = await googleService.uploadDataToSheet(
-                dataToUpload,
-                spreadsheetId,
-                sheetIdentifier,
-                cleanedStartCell,
-                {
-                    startNamedRange: cleanedStartNamedRange,
-                    transpose: transpose,
-                    tableTitle: tableTitle,
-                    dataOnly: dataOnly,
-                    sqlQuery: sqlQuery,
-                    tableName: config.table_name
+        const rangeParts = uploadResult.range.split('!');
+        const cellRange = rangeParts.length > 1 ? rangeParts[1] : '';
+        const sheetUrl = `https://docs.google.com/spreadsheets/d/${context.spreadsheetId}/edit#gid=${uploadResult.sheetId}&range=${cellRange}`;
+        const openSheetButton = 'Open Sheet';
+        const successName = displaySheetName || (typeof context.sheetIdentifier === 'number'
+            ? `Sheet ID ${context.sheetIdentifier}`
+            : 'the target sheet');
+        vscode.window.showInformationMessage(`Successfully exported query results to Google Sheet: ${successName}`, openSheetButton)
+            .then(selection => {
+                if (selection === openSheetButton) {
+                    vscode.env.openExternal(vscode.Uri.parse(sheetUrl));
                 }
-            );
-            logger.info('Data uploaded successfully.', { audience: ['developer'] });
+            });
 
-            // Log the result details
-            logger.info(`Spreadsheet ID: ${spreadsheetId}`);
-            const displaySheetName = uploadResult.sheetName
-                ?? (typeof sheetIdentifier === 'string' ? sheetIdentifier : undefined)
-                ?? (typeof sheetIdentifier === 'number' ? sheetIdentifier.toString() : '');
-            if (displaySheetName) {
-                logger.info(`Sheet: ${displaySheetName}`);
-            }
-            logger.info(`Range: ${uploadResult.range}`);
-
-            // Show a success message to the user with a link to the sheet
-            const rangeParts = uploadResult.range.split('!');
-            const cellRange = rangeParts.length > 1 ? rangeParts[1] : '';
-            const sheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${uploadResult.sheetId}&range=${cellRange}`;
-            const openSheetButton = 'Open Sheet';
-            const successName = displaySheetName || (typeof sheetIdentifier === 'number' ? `Sheet ID ${sheetIdentifier}` : 'the target sheet');
-            vscode.window.showInformationMessage(`Successfully exported query results to Google Sheet: ${successName}`, openSheetButton)
-                .then(selection => {
-                    if (selection === openSheetButton) {
-                        vscode.env.openExternal(vscode.Uri.parse(sheetUrl));
-                    }
-                });
-
-            return uploadResult;
-        } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            logger.error('Failed to export query to Google Sheet', { data: err });
-            vscode.window.showErrorMessage(`Failed to export query to Google Sheet: ${errorMessage}`);
-        }
+        return uploadResult;
     }
 }
 
