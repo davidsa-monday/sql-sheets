@@ -25,7 +25,7 @@
         {
           "id": "sql-parameters-view-container",
           "title": "SQL Parameters",
-          "icon": "media/icon.png"
+          "icon": "media/activitybar.svg"
         }
       ]
     },
@@ -35,7 +35,7 @@
           "id": "sql-sheets.editor",
           "name": "SQL Sheet Editor",
           "type": "webview",
-          "icon": "media/icon.png"
+          "icon": "media/activitybar.svg"
         }
       ]
     },
