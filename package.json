@@ -75,6 +75,32 @@
         "icon": "$(file-symlink-file)"
       }
     ],
+    "keybindings": [
+      {
+        "command": "sql-sheets.exportQueryToSheets",
+        "key": "ctrl+alt+enter",
+        "mac": "cmd+alt+enter",
+        "when": "editorTextFocus && (editorLangId == 'sql' || editorLangId == 'snowflake-sql')"
+      },
+      {
+        "command": "sql-sheets.exportQueryToSheetsWithDeps",
+        "key": "ctrl+shift+alt+enter",
+        "mac": "cmd+shift+alt+enter",
+        "when": "editorTextFocus && (editorLangId == 'sql' || editorLangId == 'snowflake-sql')"
+      },
+      {
+        "command": "sql-sheets.exportFileToSheets",
+        "key": "ctrl+alt+f",
+        "mac": "cmd+alt+f",
+        "when": "editorTextFocus && (editorLangId == 'sql' || editorLangId == 'snowflake-sql')"
+      },
+      {
+        "command": "sql-sheets.exportFileToSheetsWithDeps",
+        "key": "ctrl+shift+alt+f",
+        "mac": "cmd+shift+alt+f",
+        "when": "editorTextFocus && (editorLangId == 'sql' || editorLangId == 'snowflake-sql')"
+      }
+    ],
     "configuration": {
       "title": "SQL Sheets",
       "properties": {
