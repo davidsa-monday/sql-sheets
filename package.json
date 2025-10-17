@@ -34,7 +34,8 @@
         {
           "id": "sql-sheets.editor",
           "name": "SQL Sheet Editor",
-          "type": "webview"
+          "type": "webview",
+          "icon": "media/icon.png"
         }
       ]
     },
