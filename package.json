@@ -90,14 +90,14 @@
       },
       {
         "command": "sql-sheets.exportFileToSheets",
-        "key": "ctrl+alt+f",
-        "mac": "cmd+alt+f",
+        "key": "ctrl+alt+\\",
+        "mac": "cmd+alt+\\",
         "when": "editorTextFocus && (editorLangId == 'sql' || editorLangId == 'snowflake-sql')"
       },
       {
         "command": "sql-sheets.exportFileToSheetsWithDeps",
-        "key": "ctrl+shift+alt+f",
-        "mac": "cmd+shift+alt+f",
+        "key": "ctrl+shift+alt+\\",
+        "mac": "cmd+shift+alt+\\",
         "when": "editorTextFocus && (editorLangId == 'sql' || editorLangId == 'snowflake-sql')"
       }
     ],
