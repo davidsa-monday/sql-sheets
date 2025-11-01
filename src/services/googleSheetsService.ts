@@ -57,6 +57,7 @@ export interface SheetUploadResult {
     namedRangeCreated?: boolean;
     namedRangeUpdated?: boolean;
     sheetName?: string;
+    spreadsheetTitle?: string;
 }
 
 /**
@@ -197,6 +198,7 @@ export class GoogleSheetsService {
                 let resolvedSheetName: string | undefined = typeof sheetName === 'string'
                     ? sheetName
                     : undefined;
+                let resolvedSpreadsheetTitle: string | undefined;
 
                 // Validate sheet name input
                 if (typeof sheetName === 'string' && sheetName.trim() === '') {
@@ -226,12 +228,13 @@ export class GoogleSheetsService {
                     const spreadsheetInfo = await sheets.spreadsheets.get({
                         spreadsheetId,
                         includeGridData: false,
-                        fields: 'sheets.properties,sheets.tables,namedRanges'
+                        fields: 'sheets.properties,sheets.tables,namedRanges,properties.title'
                     });
 
                     const availableSheets = spreadsheetInfo.data.sheets ?? [];
                     const typedSheets = availableSheets as SheetWithTables[];
                     const namedRanges = spreadsheetInfo.data.namedRanges ?? [];
+                    resolvedSpreadsheetTitle = spreadsheetInfo.data.properties?.title ?? resolvedSpreadsheetTitle;
 
                     if (typedSheets.length > 0) {
                         logger.info('Available sheets in this spreadsheet:', { audience: ['developer'] });
@@ -692,7 +695,8 @@ export class GoogleSheetsService {
                     startNamedRange: startNamedRange || undefined,
                     namedRangeCreated,
                     namedRangeUpdated,
-                    sheetName: resolvedSheetName ?? (typeof sheetName === 'string' ? sheetName : undefined)
+                    sheetName: resolvedSheetName ?? (typeof sheetName === 'string' ? sheetName : undefined),
+                    spreadsheetTitle: resolvedSpreadsheetTitle
                 };
             });
         } catch (err) {

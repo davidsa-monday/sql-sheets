@@ -194,7 +194,8 @@ export class SqlSheetsExportViewModel {
             config.pre_files,
             transpose,
             data_only,
-            config.skip
+            config.skip,
+            config.spreadsheet_title
         );
     }
 
@@ -295,7 +296,8 @@ export class SqlSheetsExportViewModel {
             config.pre_files,
             config.transpose,
             config.data_only,
-            config.skip
+            config.skip,
+            config.spreadsheet_title
         );
     }
 
@@ -360,6 +362,22 @@ export class SqlSheetsExportViewModel {
         if (newSheetParameter !== existingSheetParameter && newSheetParameter.length > 0) {
             await sqlFile.updateParameter(matchingQuery, 'sheet_name', newSheetParameter);
             logger.info(`Updated sheet_name parameter to "${newSheetParameter}" in SQL file.`, { audience: ['developer'] });
+        }
+
+        if (query.config.spreadsheet_id && uploadResult.spreadsheetTitle) {
+            const newSpreadsheetParameter = SqlSheetConfiguration.formatSpreadsheetIdParameter(
+                query.config.spreadsheet_id,
+                uploadResult.spreadsheetTitle
+            );
+            const existingSpreadsheetParameter = SqlSheetConfiguration.formatSpreadsheetIdParameter(
+                query.config.spreadsheet_id,
+                query.config.spreadsheet_title
+            );
+
+            if (newSpreadsheetParameter !== existingSpreadsheetParameter) {
+                await sqlFile.updateParameter(matchingQuery, 'spreadsheet_id', newSpreadsheetParameter);
+                logger.info(`Updated spreadsheet_id parameter to "${newSpreadsheetParameter}" in SQL file.`, { audience: ['developer'] });
+            }
         }
     }
 

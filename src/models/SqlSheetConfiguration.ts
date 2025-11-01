@@ -1,7 +1,7 @@
 export class SqlSheetConfiguration {
     // Static property to store parameter descriptions
     public static readonly parameterDescriptions: Record<string, string> = {
-        spreadsheet_id: "The Google Sheet ID where results will be sent",
+        spreadsheet_id: "The Google Sheet ID where results will be sent. The workbook title may appear after a '|'.",
         sheet_name: "Sheet identifier. Use \"SheetID | SheetName\" (e.g., \"315704920 | Summary\") or provide just the name or ID.",
         start_cell: "The cell where output should begin (e.g., \"A1\"). Optionally prefix with a named range like \"MyRange | A1\" to combine both.",
         start_named_range: "Legacy alternative to start_cell for named ranges. Prefer combining with start_cell as 'MyRange | A1'.",
@@ -54,6 +54,7 @@ export class SqlSheetConfiguration {
         public readonly transpose: boolean = false,
         public readonly data_only: boolean = false,
         public readonly skip: boolean = false,
+        public readonly spreadsheet_title?: string,
     ) {
         if (Array.isArray(pre_files)) {
             this.pre_files = pre_files
@@ -157,6 +158,53 @@ export class SqlSheetConfiguration {
         }
 
         return trimmedCell;
+    }
+
+    /**
+     * Parse the spreadsheet_id parameter into core ID and optional spreadsheet title components.
+     */
+    public static parseSpreadsheetIdParameter(value?: string): { spreadsheetId?: string; spreadsheetTitle?: string } {
+        if (!value) {
+            return {};
+        }
+
+        const trimmedValue = value.trim();
+        if (trimmedValue.length === 0) {
+            return {};
+        }
+
+        const separatorIndex = trimmedValue.indexOf('|');
+        if (separatorIndex === -1) {
+            return { spreadsheetId: trimmedValue };
+        }
+
+        const idPart = trimmedValue.substring(0, separatorIndex).trim();
+        const titlePart = trimmedValue.substring(separatorIndex + 1).trim();
+        const result: { spreadsheetId?: string; spreadsheetTitle?: string } = {};
+
+        if (idPart.length > 0) {
+            result.spreadsheetId = idPart;
+        }
+
+        if (titlePart.length > 0) {
+            result.spreadsheetTitle = titlePart;
+        }
+
+        return result;
+    }
+
+    /**
+     * Format the spreadsheet_id parameter using the ID and optional spreadsheet title.
+     */
+    public static formatSpreadsheetIdParameter(spreadsheetId?: string, spreadsheetTitle?: string): string {
+        const idText = typeof spreadsheetId === 'string' ? spreadsheetId.trim() : '';
+        const titleText = typeof spreadsheetTitle === 'string' ? spreadsheetTitle.trim() : '';
+
+        if (idText && titleText) {
+            return `${idText} | ${titleText}`;
+        }
+
+        return idText;
     }
 
     /**

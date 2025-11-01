@@ -21,7 +21,7 @@
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "sql-parameters-view-container",
           "title": "SQL Parameters",

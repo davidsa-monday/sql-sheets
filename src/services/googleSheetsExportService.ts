@@ -291,7 +291,8 @@ export function registerExportQueryToSheetCommand(context: vscode.ExtensionConte
                 undefined, // pre_files
                 transpose,
                 dataOnly,
-                false // skip
+                false, // skip
+                undefined // spreadsheet_title
             );
 
             // Export the query to the sheet

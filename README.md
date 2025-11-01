@@ -51,17 +51,17 @@ This extension works with SQL files that include special comment headers for Goo
 4. Select your credentials JSON file when prompted
 
 A template credentials file is provided in the `samples` directory of this extension.
-3. Click on the SQL Parameters icon in the Activity Bar (looks like a database icon)
+3. Click on the SQL Parameters icon in the Secondary Side Bar (looks like a database icon)
 4. The SQL Sheet Editor pane will appear, showing the parameters for your SQL file
 5. If the view is not visible, you can also run the "Show SQL Sheet Editor" command from the Command Palette (Ctrl+Shift+P or Cmd+Shift+P)
 
 ### Enabling the View
 
-The SQL Parameters view should automatically appear in your Activity Bar after installing the extension. If you don't see it:
+The SQL Parameters view should automatically appear in your Secondary Side Bar after installing the extension. If you don't see it:
 
 1. Open the Command Palette with `Ctrl+Shift+P` (Windows/Linux) or `Cmd+Shift+P` (macOS)
 2. Type "View: Show SQL Parameters" and select it when it appears
-3. The SQL Parameters icon should now appear in your Activity Bar
+3. The SQL Parameters icon should now appear in your Secondary Side Bar
 
 ## Parameters
 

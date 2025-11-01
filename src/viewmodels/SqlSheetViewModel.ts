@@ -7,7 +7,7 @@ export class SqlSheetViewModel {
     // Get all parameter keys from SqlSheetConfiguration using reflection
     private static _parameterKeys: string[] = Object.getOwnPropertyNames(
         new SqlSheetConfiguration())
-        .filter(key => key !== 'constructor' && key !== 'start_named_range' && key !== 'sheet_id')
+        .filter(key => key !== 'constructor' && key !== 'start_named_range' && key !== 'sheet_id' && key !== 'spreadsheet_title')
         .map(key => key === 'pre_files' ? 'pre_file' : key);
 
     // Expose the keys as a property

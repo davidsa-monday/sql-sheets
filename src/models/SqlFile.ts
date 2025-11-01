@@ -167,8 +167,12 @@ export class SqlFile {
             // Process boolean parameters using centralized validation in SqlSheetConfiguration
             // If the parameter doesn't exist in the SQL comment, it will be undefined
             // and the constructor will use the default value (false)
+            const parsedSpreadsheetParameter = SqlSheetConfiguration.parseSpreadsheetIdParameter(params['spreadsheet_id']);
+            const spreadsheetId = parsedSpreadsheetParameter.spreadsheetId ?? (params['spreadsheet_id']?.trim() ?? undefined);
+            const spreadsheetTitle = parsedSpreadsheetParameter.spreadsheetTitle;
+
             const config = new SqlSheetConfiguration(
-                params['spreadsheet_id'],
+                spreadsheetId,
                 sheetName,
                 sheetId,
                 startCell,
@@ -178,7 +182,8 @@ export class SqlFile {
                 preFiles,
                 SqlSheetConfiguration.stringToBoolean(params['transpose']),
                 SqlSheetConfiguration.stringToBoolean(params['data_only']),
-                SqlSheetConfiguration.stringToBoolean(params['skip'])
+                SqlSheetConfiguration.stringToBoolean(params['skip']),
+                spreadsheetTitle
             );
 
             this._queries.push(new SqlQuery(config, queryText, startOffset, endOffset, this.document.uri, parameterSources));
