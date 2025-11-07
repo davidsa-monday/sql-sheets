@@ -1,12 +1,15 @@
 import * as vscode from 'vscode';
 import * as snowflake from 'snowflake-sdk';
 import * as fs from 'fs';
+import { getLogger } from './loggingService';
 
 /**
  * Service for handling Snowflake database connections and queries
  */
 export class SnowflakeService {
     private connection: snowflake.Connection | null = null;
+    private connectionPromise: Promise<snowflake.Connection> | null = null;
+    private readonly logger = getLogger();
 
     constructor() {
         // Initialize snowflake driver
@@ -64,56 +67,69 @@ export class SnowflakeService {
      * Creates a Snowflake connection using credentials from the extension settings
      */
     public async createConnection(): Promise<snowflake.Connection> {
-        // Close any existing connection
-        await this.closeConnection();
-
-        // Try to load credentials from file first, then fall back to settings
-        const credentials = this.loadCredentialsFromFile();
-        const { user, password, account, warehouse, database, schema } = credentials;
-
-        // Validate required fields
-        if (!user || !password || !account) {
-            throw new Error('Missing required Snowflake connection parameters (user, password, or account)');
+        if (this.connectionPromise) {
+            return this.connectionPromise;
         }
 
-        // Create connection options
-        const connectionOptions: snowflake.ConnectionOptions = {
-            account,
-            username: user,
-            password,
-            application: 'SQLSheetsVSCodeExtension',
-        };
+        this.connectionPromise = (async () => {
+            // Close any existing connection
+            await this.closeConnection();
 
-        if (warehouse) {
-            connectionOptions.warehouse = warehouse;
-        }
+            // Load credentials from configuration
+            const credentials = this.loadCredentialsFromFile();
+            const { user, password, account, warehouse, database, schema } = credentials;
 
-        if (database) {
-            connectionOptions.database = database;
-        }
-
-        if (schema) {
-            connectionOptions.schema = schema;
-        }
-
-        // Create connection
-        this.connection = snowflake.createConnection(connectionOptions);
-
-        // Connect and return the connection
-        return new Promise<snowflake.Connection>((resolve, reject) => {
-            if (!this.connection) {
-                reject(new Error('Failed to create Snowflake connection'));
-                return;
+            // Validate required fields
+            if (!user || !password || !account) {
+                throw new Error('Missing required Snowflake connection parameters (user, password, or account)');
             }
 
-            this.connection.connect((err: Error | undefined | null, conn: snowflake.Connection) => {
-                if (err) {
-                    reject(err);
+            // Create connection options
+            const connectionOptions: snowflake.ConnectionOptions = {
+                account,
+                username: user,
+                password,
+                application: 'SQLSheetsVSCodeExtension',
+            };
+
+            if (warehouse) {
+                connectionOptions.warehouse = warehouse;
+            }
+
+            if (database) {
+                connectionOptions.database = database;
+            }
+
+            if (schema) {
+                connectionOptions.schema = schema;
+            }
+
+            // Create connection
+            this.connection = snowflake.createConnection(connectionOptions);
+
+            // Connect and return the connection
+            return await new Promise<snowflake.Connection>((resolve, reject) => {
+                if (!this.connection) {
+                    reject(new Error('Failed to create Snowflake connection'));
                     return;
                 }
-                resolve(conn);
+
+                this.connection.connect((err: Error | undefined | null, conn: snowflake.Connection) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+                    this.logger.debug('Connected to Snowflake.', { audience: ['developer'] });
+                    resolve(conn);
+                });
             });
-        });
+        })();
+
+        try {
+            return await this.connectionPromise;
+        } finally {
+            this.connectionPromise = null;
+        }
     }
 
     /**
@@ -122,30 +138,49 @@ export class SnowflakeService {
      * @returns Query results
      */
     public async executeQuery(query: string): Promise<any[]> {
-        if (!this.connection) {
-            await this.createConnection();
-        }
+        return new Promise<any[]>(async (resolve, reject) => {
+            try {
+                await this.ensureActiveConnection();
+            } catch (err) {
+                reject(err);
+                return;
+            }
 
-        if (!this.connection) {
-            throw new Error('No active Snowflake connection');
-        }
-
-        return new Promise<any[]>((resolve, reject) => {
-            this.connection!.execute({
-                sqlText: query,
-                // Preserve duplicate column names by letting the driver append numeric suffixes
-                rowMode: 'object_with_renamed_duplicated_columns',
-                complete: (err: Error | undefined | null, stmt: any, rows: any[] | undefined) => {
-                    if (err) {
-                        reject(err);
-                        return;
-                    }
-                    resolve(rows || []);
-                },
-                parameters: {
-                    MULTI_STATEMENT_COUNT: 0  // Set to 0 to allow unlimited statements or a specific number
+            const attemptExecution = (retrying: boolean) => {
+                if (!this.connection) {
+                    reject(new Error('No active Snowflake connection'));
+                    return;
                 }
-            });
+
+                this.connection.execute({
+                    sqlText: query,
+                    // Preserve duplicate column names by letting the driver append numeric suffixes
+                    rowMode: 'object_with_renamed_duplicated_columns',
+                    complete: (err: Error | undefined | null, stmt: any, rows: any[] | undefined) => {
+                        if (err) {
+                            if (!retrying && this.shouldAttemptReconnect(err)) {
+                                this.logger.warn('Snowflake connection interrupted. Attempting to reconnect...', {
+                                    audience: ['developer'],
+                                    data: err
+                                });
+                                this.invalidateConnection();
+                                this.createConnection()
+                                    .then(() => attemptExecution(true))
+                                    .catch(reject);
+                                return;
+                            }
+                            reject(err);
+                            return;
+                        }
+                        resolve(rows || []);
+                    },
+                    parameters: {
+                        MULTI_STATEMENT_COUNT: 0  // Set to 0 to allow unlimited statements or a specific number
+                    }
+                });
+            };
+
+            attemptExecution(false);
         });
     }
 
@@ -165,7 +200,7 @@ export class SnowflakeService {
     public async closeConnection(): Promise<void> {
         return new Promise<void>((resolve) => {
             if (this.connection) {
-                this.connection.destroy((err: Error | undefined | null) => {
+                this.connection.destroy(() => {
                     this.connection = null;
                     resolve();
                 });
@@ -174,6 +209,64 @@ export class SnowflakeService {
             }
         });
     }
+
+    private async ensureActiveConnection(): Promise<snowflake.Connection> {
+        if (this.connection && typeof this.connection.isUp === 'function' && this.connection.isUp()) {
+            return this.connection;
+        }
+        return this.createConnection();
+    }
+
+    private shouldAttemptReconnect(err: unknown): boolean {
+        if (!err || typeof err !== 'object') {
+            return false;
+        }
+
+        const snowflakeError = err as snowflake.SnowflakeError;
+        const sqlState = snowflakeError.sqlState;
+        const code = snowflakeError.code;
+        const isFatal = Boolean((snowflakeError as { isFatal?: boolean }).isFatal);
+        const reconnectableSqlStates = new Set(['08002', '08003', '08006']);
+        const reconnectableCodes = new Set([405503, 407001, 407002]);
+
+        if (sqlState && reconnectableSqlStates.has(sqlState)) {
+            return true;
+        }
+
+        if (typeof code === 'number' && reconnectableCodes.has(code)) {
+            return true;
+        }
+
+        if (isFatal) {
+            return true;
+        }
+
+        const message = typeof snowflakeError.message === 'string'
+            ? snowflakeError.message.toLowerCase()
+            : '';
+
+        const reconnectablePhrases = [
+            'session no longer exists',
+            'connection is closed',
+            'connection already closed',
+            'session not found',
+            'invalid connection'
+        ];
+
+        return reconnectablePhrases.some(phrase => message.includes(phrase));
+    }
+
+    private invalidateConnection(): void {
+        if (this.connection) {
+            try {
+                this.connection.destroy(() => { /* noop */ });
+            } catch {
+                // Ignore errors while tearing down a broken connection
+            }
+        }
+        this.connection = null;
+    }
+
 }
 
 // Singleton instance
