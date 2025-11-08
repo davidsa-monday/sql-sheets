@@ -6,6 +6,57 @@ let allKeys = [];
 let descriptions = {};
 let parameterTypes = {};
 
+// Extract spreadsheet + sheet identifiers from a Google Sheets URL
+function parseGoogleSheetsUrl(value) {
+    if (typeof value !== 'string') {
+        return {};
+    }
+
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+        return {};
+    }
+
+    const idMatch = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/i);
+    if (!idMatch) {
+        return {};
+    }
+
+    const result = { spreadsheetId: idMatch[1] };
+    const gidMatch = trimmed.match(/[?#&]gid=(\d+)/i);
+    if (gidMatch) {
+        result.sheetGid = gidMatch[1];
+    }
+
+    return result;
+}
+
+// Update the sheet identifier fields when a gid is discovered
+function applySheetIdFromUrl(sheetGid) {
+    if (sheetGid === undefined) {
+        return;
+    }
+
+    const sheetIdField = document.getElementById('field-sheet_name-id');
+    if (!sheetIdField) {
+        return;
+    }
+
+    const sheetNameField = document.getElementById('field-sheet_name');
+    sheetIdField.value = sheetGid;
+
+    const trimmedName = sheetNameField && typeof sheetNameField.value === 'string'
+        ? sheetNameField.value.trim()
+        : '';
+    const combinedValue = trimmedName ? `${sheetGid} | ${trimmedName}` : sheetGid;
+
+    vscode.postMessage({
+        type: 'edit',
+        key: 'sheet_name',
+        value: combinedValue
+    });
+}
+
 window.addEventListener('message', event => {
     const message = event.data;
     switch (message.type) {
@@ -71,6 +122,38 @@ function updateGrid(config) {
 
         let field;
         const type = parameterTypes[key];
+
+        if (key === 'spreadsheet_id') {
+            field = document.createElement('vscode-text-field');
+            field.id = `field-${key}`;
+            field.value = safeConfig[key] || '';
+            field.placeholder = 'Spreadsheet ID or URL';
+            if (descriptions[key]) {
+                field.title = descriptions[key];
+            }
+
+            field.addEventListener('change', (e) => {
+                const rawValue = e.target.value || '';
+                const parsed = parseGoogleSheetsUrl(rawValue);
+                let valueToPersist = rawValue;
+
+                if (parsed.spreadsheetId) {
+                    valueToPersist = parsed.spreadsheetId;
+                    e.target.value = parsed.spreadsheetId;
+                    applySheetIdFromUrl(parsed.sheetGid);
+                }
+
+                vscode.postMessage({
+                    type: 'edit',
+                    key: key,
+                    value: valueToPersist
+                });
+            });
+
+            form.appendChild(label);
+            form.appendChild(field);
+            return;
+        }
 
         if (key === 'start_cell') {
             const namedRangeValue = safeConfig['start_named_range'] || '';
