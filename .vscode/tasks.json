@@ -59,7 +59,7 @@
 		{
 			"label": "Package and Install",
 			"type": "shell",
-			"command": "npm run package && /Applications/Visual\\ Studio\\ Code.app/Contents/Resources/app/bin/code --install-extension \"$(ls -t sql-sheets-*.vsix | head -n 1)\"",
+			"command": "npm run package && /Applications/Visual\\ Studio\\ Code.app/Contents/Resources/app/bin/code --install-extension \"$(ls -t sql-sheets-*.vsix | head -n 1)\" --profile \"SQL-monday\"",
 			"group": "build",
 			"problemMatcher": [],
 			"presentation": {
